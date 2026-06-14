@@ -43,6 +43,7 @@ const P2_BUTTONS: ButtonSpec[] = [
 const MENU_BUTTONS: ButtonSpec[] = [
   { label: '対戦切替', key: 'c', className: 'tc-menu-mode', momentary: true },
   { label: '難易度', key: 'v', className: 'tc-menu-diff', momentary: true },
+  { label: 'アシスト', key: 'h', className: 'tc-menu-assist', momentary: true },
   { label: '🔊', key: 'm', className: 'tc-menu-mute', momentary: true },
   { label: 'リスタート', key: 'enter', className: 'tc-menu-restart', momentary: true },
 ];

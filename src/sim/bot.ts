@@ -70,13 +70,16 @@ export function reactiveBot(reactionDelay: number): Bot {
  */
 /**
  * cpuBot のプリセット難易度。
- * - easy: 反応が遅く、サボりがちで間合いの調整も粗い。
- * - normal: デフォルト(`cpuBot()` の既定値と同じ)。
- * - hard: 反応が早く、サボりが少ない(が `JUST.window`(7)以内なので
- *   依然としてジャスト回避自体は反応次第で防げる)。
+ * - easy: 反応が遅く、サボりがち。reactionDelay(10)を `JUST.window`(9)より大きく
+ *   取ることで、easy CPU が回避してもダメージ無効どまりでプレイヤーを硬直させない
+ *   (= ジャスト回避の反撃をもらわない)ため、初心者でも攻め込みやすい。
+ * - normal: 標準。reactionDelay(6)≦ window なので反応したときはジャスト回避で
+ *   こちらを硬直させてくる。
+ * - hard: 反応が早く、サボりが少ない(reactionDelay(4)≦ window なので
+ *   反応すればほぼジャスト回避で切り返してくる)。
  */
 export const CPU_DIFFICULTIES = {
-  easy: { reactionDelay: 9, skipReactionChance: 0.6 },
+  easy: { reactionDelay: 10, skipReactionChance: 0.6 },
   normal: { reactionDelay: 6, skipReactionChance: 0.35 },
   hard: { reactionDelay: 4, skipReactionChance: 0.12 },
 } as const satisfies Record<string, { reactionDelay: number; skipReactionChance: number }>;

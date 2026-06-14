@@ -1,4 +1,4 @@
-import { ARENA, ATTACKS, DODGE, JUMP, MATCH, PLAYER } from '../engine/constants';
+import { ARENA, ATTACKS, DODGE, JUMP, JUST, MATCH, PLAYER } from '../engine/constants';
 import type { GameState, PlayerState } from '../engine/types';
 
 const COLORS = {
@@ -52,6 +52,11 @@ export interface RenderEffects {
   /** 現在のモード表示("VS CPU" / "VS PLAYER") */
   modeLabel?: string;
   /**
+   * ジャスト回避タイミングのアシスト表示(攻撃側に収束リングを描く)の ON/OFF。
+   * 未指定(undefined)のときは ON 扱い。初心者がジャスト回避の間合いを掴むための補助。
+   */
+  showJustCue?: boolean;
+  /**
    * ワールド座標系(シェイク変換の内側)に追加描画するためのフック。
    * 攻撃判定やテレグラフより後、HUD より前に呼び出される
    * (パーティクルなどを画面シェイクと一致させつつ、キャラクターより前面に出すため)。
@@ -95,6 +100,8 @@ export class Renderer {
     for (const p of state.players) this.drawShadow(p);
     for (const p of state.players) this.drawDodgeAfterimage(p);
     for (const p of state.players) this.drawTelegraph(p);
+    const showJustCue = effects.showJustCue ?? true;
+    for (const p of state.players) this.drawJustCue(p, showJustCue);
     for (const p of state.players) this.drawAttackRange(p);
     for (const p of state.players) this.drawPlayer(p);
 
@@ -399,6 +406,45 @@ export class Renderer {
       ctx.lineWidth = isHeavy ? 3 : 2;
       ctx.strokeRect(x0, telegraphY, width, ARENA.playerSize + 12);
     }
+  }
+
+  /**
+   * ジャスト回避アシスト: 攻撃の windup 中、攻撃側を囲む「収束リング」を描く。
+   * リングは active 発生に向けて縮み、ちょうど発生する瞬間にプレイヤー大に重なる。
+   * 発生まで `JUST.window` tick 以内(=今回避を出せばジャスト成立する猶予)に入ると
+   * リングを金色に光らせ、「今だ!」というジャスト回避の合図にする。
+   * これにより初心者でも「リングが光ったら回避」と視覚的にタイミングを学べる。
+   */
+  private drawJustCue(p: PlayerState, enabled: boolean): void {
+    if (!enabled || !p.attack) return;
+    const spec = ATTACKS[p.attack.kind];
+    if (p.attack.elapsed >= spec.windup) return; // windup 中のみ
+
+    const { ctx } = this;
+    const ticksUntilActive = spec.windup - p.attack.elapsed;
+    const progress = p.attack.elapsed / spec.windup; // 0(windup開始) → 1(発生直前)
+    const cx = p.x + ARENA.playerSize / 2;
+    const cy = ARENA.floorY - p.y + ARENA.playerSize / 2;
+
+    const maxR = ARENA.playerSize * 1.7;
+    const minR = ARENA.playerSize * 0.62;
+    const r = maxR - (maxR - minR) * progress;
+
+    const inJustWindow = ticksUntilActive <= JUST.window;
+    const rgb = inJustWindow ? '255, 224, 102' : '255, 255, 255';
+    const alpha = inJustWindow ? 0.9 : 0.22 + 0.28 * progress;
+
+    ctx.save();
+    ctx.strokeStyle = `rgba(${rgb}, ${alpha.toFixed(2)})`;
+    ctx.lineWidth = inJustWindow ? 3 : 2;
+    if (inJustWindow) {
+      ctx.shadowColor = `rgba(${rgb}, 0.85)`;
+      ctx.shadowBlur = 12;
+    }
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   private drawAttackRange(p: PlayerState): void {

@@ -78,9 +78,14 @@ export const DODGE = {
 export const JUST = {
   /**
    * ジャスト回避成立窓: 攻撃の active 開始から見て、防御側が回避を開始した
-   * tick が「active 開始の justWindow tick 前以内」ならジャスト成立。
+   * tick が「active 開始の window tick 前以内」ならジャスト成立。
+   *
+   * 9 tick ≈ 150ms。やや反応が忙しかったため 7→9 に緩和(易化)した
+   * (精密回避の猶予が約 120ms → 150ms に広がる)。
+   * 注: この値を loose ボットの reactionDelay(15)以上に上げると、
+   *     ヘッドレスシミュレーションの基準結果が変わるため 15 未満に保つこと(DESIGN.md 参照)。
    */
-  window: 7,
+  window: 9,
   /** ジャスト成立時、攻撃側に与える硬直 tick */
   stunTicks: 24,
   /** ジャスト成立時、防御側に還元するスタミナ(消費全額) */

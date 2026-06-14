@@ -37,11 +37,17 @@ let lastTime = performance.now();
 // デフォルトは CPU 対戦(1人プレイ即開始)。'c' キーで 2P ローカル対戦に切替。
 let vsCpu = true;
 
+// --- ジャスト回避アシスト ----------------------------------------------
+// 攻撃側に収束リングを描き、ジャスト回避の猶予に入ると金色に光らせる補助表示。
+// 'h' キーで ON/OFF を切替(初心者はタイミングを掴みやすく、上級者は消せる)。
+let showJustCue = true;
+
 // --- CPU 難易度 ---------------------------------------------------------
 // 'v' キーで easy -> normal -> hard を循環。VS PLAYER 中でも切替可能
 // (次に VS CPU に戻したとき反映される)。
 const CPU_DIFFICULTY_ORDER: CpuDifficulty[] = ['easy', 'normal', 'hard'];
-let cpuDifficulty: CpuDifficulty = 'normal';
+// 既定は easy(やさしめ)。慣れてきたら 'v' で normal/hard に上げられる。
+let cpuDifficulty: CpuDifficulty = 'easy';
 let cpu = cpuBot(
   CPU_DIFFICULTIES[cpuDifficulty].reactionDelay,
   CPU_DIFFICULTIES[cpuDifficulty].skipReactionChance
@@ -165,6 +171,9 @@ function handleMenuInputs(): void {
   if (input.wasJustPressed('m')) {
     audio.setMuted(!audio.muted);
   }
+  if (input.wasJustPressed('h')) {
+    showJustCue = !showJustCue;
+  }
   if (state.phase === 'matchOver') {
     if (input.wasJustPressed('enter') || input.wasJustPressed(' ')) {
       state = createInitialState();
@@ -212,9 +221,11 @@ function loop(now: number): void {
     ? `VS CPU [${cpuDifficulty.toUpperCase()}] (C:対戦切替 V:難易度)`
     : `VS PLAYER (C:対戦切替 V:難易度)`;
   const muteIcon = audio.muted ? '🔇' : '🔊';
+  const assistIcon = showJustCue ? '🟡' : '⚪';
 
   const effects: RenderEffects = {
-    modeLabel: `${modeLabel}  ${muteIcon} M:ミュート`,
+    modeLabel: `${modeLabel}  ${muteIcon} M:ミュート  ${assistIcon} H:アシスト`,
+    showJustCue,
     worldOverlay: (ctx) => particles.draw(ctx),
   };
 
