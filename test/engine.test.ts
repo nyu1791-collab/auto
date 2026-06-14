@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { step } from '../src/engine/engine';
 import { ARENA, ATTACKS, DODGE, JUST, MATCH, PLAYER, TPS } from '../src/engine/constants';
 import { createInitialState } from '../src/engine/state';
-import type { GameState, Inputs, PlayerInput, PlayerState, Vec2 } from '../src/engine/types';
+import type { GameState, Inputs, PlayerInput, PlayerState } from '../src/engine/types';
 
-const NO_INPUT: PlayerInput = { move: { x: 0, z: 0 }, dodge: false, attack: null };
+const NO_INPUT: PlayerInput = { move: 0, dodge: false, attack: null };
 
 function makePlayer(id: 0 | 1, overrides: Partial<PlayerState> = {}): PlayerState {
   return {
     id,
-    pos: { x: 0, z: 0 },
-    facing: id === 0 ? 0 : Math.PI,
+    x: 0,
+    facing: id === 0 ? 1 : -1,
     hp: PLAYER.maxHp,
     stamina: PLAYER.maxStamina,
     attack: null,
@@ -39,10 +39,7 @@ function makeState(
 }
 
 function inputs(p0: Partial<PlayerInput> = {}, p1: Partial<PlayerInput> = {}): Inputs {
-  return [
-    { ...NO_INPUT, ...p0, move: { ...NO_INPUT.move, ...p0.move } },
-    { ...NO_INPUT, ...p1, move: { ...NO_INPUT.move, ...p1.move } },
-  ];
+  return [{ ...NO_INPUT, ...p0 }, { ...NO_INPUT, ...p1 }];
 }
 
 describe('createInitialState', () => {
@@ -54,78 +51,33 @@ describe('createInitialState', () => {
     expect(state.phase).toBe('starting');
     expect(state.phaseTimer).toBe(MATCH.startCountdownTicks);
   });
-
-  it('faces both players toward each other along the x axis', () => {
-    const state = createInitialState();
-    // P0 は -x 側、P1 は +x 側にいるため、互いに向き合う facing は 0 / π
-    expect(state.players[0].pos).toEqual({ x: -180, z: 0 });
-    expect(state.players[1].pos).toEqual({ x: 180, z: 0 });
-    expect(state.players[0].facing).toBeCloseTo(0);
-    expect(state.players[1].facing).toBeCloseTo(Math.PI);
-  });
 });
 
 describe('movement', () => {
-  it('moves in world +x (screen right), independent of facing', () => {
-    const state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
-    const next = step(state, inputs({ move: { x: 1, z: 0 } }));
-    expect(next.players[0].pos.x).toBeCloseTo(-180 + PLAYER.moveSpeed);
-    expect(next.players[0].pos.z).toBeCloseTo(0);
+  it('moves a player according to input', () => {
+    const state = makeState({ x: 100 }, { x: 300 });
+    const next = step(state, inputs({ move: 1 }));
+    expect(next.players[0].x).toBe(100 + PLAYER.moveSpeed);
   });
 
-  it('moves in world -x with negative x input', () => {
-    const state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
-    const next = step(state, inputs({ move: { x: -1, z: 0 } }));
-    expect(next.players[0].pos.x).toBeCloseTo(-180 - PLAYER.moveSpeed);
-  });
+  it('clamps movement to the arena bounds', () => {
+    const left = makeState({ x: 0 }, { x: 300 });
+    expect(step(left, inputs({ move: -1 })).players[0].x).toBe(0);
 
-  it('moves in world -z (into the screen) to side-step', () => {
-    const state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
-    const next = step(state, inputs({ move: { x: 0, z: -1 } }));
-    expect(next.players[0].pos.x).toBeCloseTo(-180);
-    expect(next.players[0].pos.z).toBeCloseTo(0 - PLAYER.moveSpeed);
-  });
-
-  it('normalizes diagonal input to unit length', () => {
-    const state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
-    const next = step(state, inputs({ move: { x: 1, z: 1 } }));
-    const dx = next.players[0].pos.x - -180;
-    const dz = next.players[0].pos.z - 0;
-    expect(Math.hypot(dx, dz)).toBeCloseTo(PLAYER.moveSpeed);
-  });
-
-  it('clamps movement to the circular arena bounds', () => {
-    const limit = ARENA.radius - ARENA.playerRadius;
-    // すでに境界上にいて、外側(+x)へ向かう入力を与える
-    const pos: Vec2 = { x: limit, z: 0 };
-    const state = makeState({ pos, facing: 0 }, { pos: { x: -limit, z: 0 } });
-    const next = step(state, inputs({ move: { x: 1, z: 0 } }));
-    const dist = Math.hypot(next.players[0].pos.x, next.players[0].pos.z);
-    expect(dist).toBeLessThanOrEqual(limit + 1e-9);
-  });
-});
-
-describe('lock-on facing', () => {
-  it('updates facing to point toward the opponent every tick', () => {
-    // P0 を P1 の真横(+z 方向)に配置し直す
-    const state = makeState({ pos: { x: 0, z: -50 }, facing: 0 }, { pos: { x: 0, z: 50 }, facing: Math.PI });
-    const next = step(state, inputs());
-    // P0 から見て P1 は +z 方向 → facing = atan2(100, 0) = π/2
-    expect(next.players[0].facing).toBeCloseTo(Math.PI / 2);
-    // P1 から見て P0 は -z 方向 → facing = atan2(-100, 0) = -π/2
-    expect(next.players[1].facing).toBeCloseTo(-Math.PI / 2);
+    const right = makeState({ x: ARENA.width - ARENA.playerSize }, { x: 300 });
+    expect(step(right, inputs({ move: 1 })).players[0].x).toBe(ARENA.width - ARENA.playerSize);
   });
 });
 
 describe('attack lifecycle', () => {
-  it('starts an attack, commits aimAngle, locks movement, and returns to neutral after recovery', () => {
-    let state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
+  it('starts an attack, locks movement, and returns to neutral after recovery', () => {
+    let state = makeState({ x: 100 }, { x: 500 });
     state = step(state, inputs({ attack: 'light' }));
-    expect(state.players[0].attack).toEqual({ kind: 'light', elapsed: 1, hasHit: false, aimAngle: 0 });
+    expect(state.players[0].attack).toEqual({ kind: 'light', elapsed: 1, hasHit: false });
 
-    const posWhileAttacking = { ...state.players[0].pos };
-    state = step(state, inputs({ move: { x: 1, z: 0 } }));
-    expect(state.players[0].pos).toEqual(posWhileAttacking);
+    const xWhileAttacking = state.players[0].x;
+    state = step(state, inputs({ move: 1 }));
+    expect(state.players[0].x).toBe(xWhileAttacking);
 
     const total = ATTACKS.light.windup + ATTACKS.light.active + ATTACKS.light.recovery;
     for (let i = 0; i < total + 2; i++) {
@@ -136,41 +88,25 @@ describe('attack lifecycle', () => {
 });
 
 describe('dodge', () => {
-  it('consumes stamina and dashes backward (away from opponent) when no move input is given', () => {
-    const state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
+  it('consumes stamina and dashes away from the opponent during i-frames', () => {
+    const state = makeState({ x: 100 }, { x: 300 });
     const next = step(state, inputs({ dodge: true }));
 
-    expect(next.players[0].dodge).toMatchObject({ elapsed: 1, startedAtTick: 0 });
-    // 入力なし → facingVec の反対(バックステップ): facing=0 → facingVec=(1,0) → dir=(-1,0)
-    expect(next.players[0].dodge?.dirX).toBeCloseTo(-1);
-    expect(next.players[0].dodge?.dirZ).toBeCloseTo(0);
-    expect(next.players[0].pos.x).toBeCloseTo(-180 - DODGE.dashSpeed);
+    expect(next.players[0].dodge).toEqual({ elapsed: 1, startedAtTick: 0 });
+    expect(next.players[0].x).toBe(100 - DODGE.dashSpeed);
     expect(next.players[0].stamina).toBeCloseTo(
       PLAYER.maxStamina - DODGE.staminaCost + PLAYER.staminaRegenPerTick
     );
   });
 
-  it('dashes in the direction of move input when given', () => {
-    // 移動入力 {x:0, z:-1}(画面奥)へダッシュする
-    const state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
-    const next = step(state, inputs({ dodge: true, move: { x: 0, z: -1 } }));
-
-    expect(next.players[0].dodge?.dirX).toBeCloseTo(0);
-    expect(next.players[0].dodge?.dirZ).toBeCloseTo(-1);
-    expect(next.players[0].pos.z).toBeCloseTo(0 - DODGE.dashSpeed);
-  });
-
   it('cannot dodge without enough stamina', () => {
-    const state = makeState(
-      { pos: { x: -180, z: 0 }, facing: 0, stamina: DODGE.staminaCost - 1 },
-      { pos: { x: 180, z: 0 } }
-    );
+    const state = makeState({ x: 100, stamina: DODGE.staminaCost - 1 }, { x: 300 });
     const next = step(state, inputs({ dodge: true }));
     expect(next.players[0].dodge).toBeNull();
   });
 
   it('enters cooldown after the dodge animation completes', () => {
-    let state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
+    let state = makeState({ x: 100 }, { x: 300 });
     state = step(state, inputs({ dodge: true }));
     for (let i = 1; i < DODGE.duration; i++) {
       state = step(state, inputs());
@@ -182,7 +118,7 @@ describe('dodge', () => {
 
 describe('stamina regen', () => {
   it('regenerates roughly 25 per second', () => {
-    let state = makeState({ pos: { x: -180, z: 0 }, facing: 0, stamina: 50 }, { pos: { x: 180, z: 0 } });
+    let state = makeState({ x: 100, stamina: 50 }, { x: 300 });
     for (let i = 0; i < TPS; i++) {
       state = step(state, inputs());
     }
@@ -190,10 +126,7 @@ describe('stamina regen', () => {
   });
 
   it('caps stamina at maxStamina', () => {
-    const state = makeState(
-      { pos: { x: -180, z: 0 }, facing: 0, stamina: PLAYER.maxStamina },
-      { pos: { x: 180, z: 0 } }
-    );
+    const state = makeState({ x: 100, stamina: PLAYER.maxStamina }, { x: 300 });
     const next = step(state, inputs());
     expect(next.players[0].stamina).toBe(PLAYER.maxStamina);
   });
@@ -201,8 +134,8 @@ describe('stamina regen', () => {
 
 describe('hit resolution', () => {
   it('deals damage once on the first active frame and not again on the second', () => {
-    const dist = ATTACKS.light.range - 5;
-    let state = makeState({ pos: { x: 0, z: 0 }, facing: 0 }, { pos: { x: dist, z: 0 }, facing: Math.PI });
+    const distance = ATTACKS.light.range - 5;
+    let state = makeState({ x: 100 }, { x: 100 + distance });
     state = step(state, inputs({ attack: 'light' })); // step 1
 
     for (let i = 0; i < ATTACKS.light.windup - 1; i++) {
@@ -218,44 +151,18 @@ describe('hit resolution', () => {
   });
 
   it('does not deal damage when the defender is out of range', () => {
-    let state = makeState(
-      { pos: { x: 0, z: 0 }, facing: 0 },
-      { pos: { x: ATTACKS.light.range + 50, z: 0 }, facing: Math.PI }
-    );
+    let state = makeState({ x: 0 }, { x: ATTACKS.light.range + 50 });
     state = step(state, inputs({ attack: 'light' }));
     for (let i = 0; i < ATTACKS.light.windup; i++) {
       state = step(state, inputs());
     }
     expect(state.players[1].hp).toBe(PLAYER.maxHp);
   });
-
-  it('misses when the defender side-steps out of the attack arc', () => {
-    // 攻撃開始時、相手は正面(facing=0, aimAngle=0)の射程内にいる。
-    // windup 中に相手が真横へサイドステップして移動し、active 時には
-    // aimAngle との角度差が arcHalfAngle を超えるようにする。
-    let state = makeState(
-      { pos: { x: 0, z: 0 }, facing: 0 },
-      { pos: { x: 30, z: 0 }, facing: Math.PI, dodgeCooldown: 0 }
-    );
-    state = step(state, inputs({ attack: 'light' })); // step 1: aimAngle = 0 固定
-
-    // P1 は +z 方向(画面手前)へサイドステップし続け、攻撃の扇(aimAngle=0)の外へ出る
-    for (let i = 0; i < ATTACKS.light.windup - 1; i++) {
-      state = step(state, inputs({}, { move: { x: 0, z: 1 } }));
-    }
-
-    const before = state.players[1].hp;
-    state = step(state, inputs({}, { move: { x: 0, z: 1 } })); // first active step
-    expect(state.players[1].hp).toBe(before); // arc 外で空振り
-  });
 });
 
 describe('just dodge', () => {
   it('negates damage, stuns the attacker, and fully refunds stamina', () => {
-    let state = makeState(
-      { pos: { x: 0, z: 0 }, facing: 0 },
-      { pos: { x: ATTACKS.light.range, z: 0 }, facing: Math.PI }
-    );
+    let state = makeState({ x: 0 }, { x: ATTACKS.light.range });
     state = step(state, inputs({ attack: 'light' })); // step 1
 
     for (let i = 0; i < 8; i++) {
@@ -273,17 +180,8 @@ describe('just dodge', () => {
     // attack is on its first active frame this tick (elapsed === windup),
     // but the defender's dodge started JUST.window + 1 ticks before activeStartTick
     const state = makeState(
-      {
-        pos: { x: 0, z: 0 },
-        facing: 0,
-        attack: { kind: 'light', elapsed: ATTACKS.light.windup, hasHit: false, aimAngle: 0 },
-      },
-      {
-        pos: { x: ATTACKS.light.range, z: 0 },
-        facing: Math.PI,
-        dodge: { elapsed: 5, startedAtTick: 0, dirX: 1, dirZ: 0 },
-        stamina: 50,
-      },
+      { x: 0, attack: { kind: 'light', elapsed: ATTACKS.light.windup, hasHit: false } },
+      { x: ATTACKS.light.range, dodge: { elapsed: 5, startedAtTick: 0 }, stamina: 50 },
       { tick: JUST.window + 1 }
     );
 
@@ -301,11 +199,11 @@ describe('starting phase', () => {
     expect(state.phase).toBe('starting');
     expect(state.roundTick).toBe(0);
 
-    const startPos = { ...state.players[0].pos };
-    state = step(state, inputs({ move: { x: 1, z: 0 }, attack: 'light', dodge: true }));
+    const startX = state.players[0].x;
+    state = step(state, inputs({ move: 1, attack: 'light', dodge: true }));
     expect(state.phase).toBe('starting');
     expect(state.phaseTimer).toBe(MATCH.startCountdownTicks - 1);
-    expect(state.players[0].pos).toEqual(startPos);
+    expect(state.players[0].x).toBe(startX);
     expect(state.players[0].attack).toBeNull();
     expect(state.players[0].dodge).toBeNull();
     expect(state.roundTick).toBe(0);
@@ -320,10 +218,7 @@ describe('starting phase', () => {
 
 describe('round and match progression', () => {
   function lethalHitSetup(p0RoundsWon: number, p1Hp: number): GameState {
-    return makeState(
-      { pos: { x: 0, z: 0 }, facing: 0, roundsWon: p0RoundsWon },
-      { pos: { x: ATTACKS.light.range, z: 0 }, facing: Math.PI, hp: p1Hp }
-    );
+    return makeState({ x: 0, roundsWon: p0RoundsWon }, { x: ATTACKS.light.range, hp: p1Hp });
   }
 
   function landHit(state: GameState): GameState {
@@ -352,11 +247,11 @@ describe('round and match progression', () => {
 
   it('ignores inputs while frozen on roundOver', () => {
     let state = landHit(lethalHitSetup(0, ATTACKS.light.damage));
-    const before = { ...state.players[1].pos };
-    state = step(state, inputs({ move: { x: 1, z: 0 } }, { move: { x: -1, z: 0 } }));
+    const before = state.players[1].x;
+    state = step(state, inputs({ move: 1 }, { move: -1 }));
     expect(state.phase).toBe('roundOver');
     expect(state.phaseTimer).toBe(MATCH.roundEndFreezeTicks - 1);
-    expect(state.players[1].pos).toEqual(before);
+    expect(state.players[1].x).toBe(before);
   });
 
   it('after the roundOver freeze, starts the next round (preserving roundsWon) then fights', () => {
@@ -391,29 +286,25 @@ describe('round and match progression', () => {
     state = runRoundOver(state);
     expect(state.phase).toBe('matchOver');
 
-    const next = step(state, inputs({ move: { x: 1, z: 0 } }));
+    const next = step(state, inputs({ move: 1 }));
     expect(next).toEqual(state);
   });
 });
 
 describe('round time limit', () => {
   it('ends the round by HP comparison when time runs out', () => {
-    const state = makeState(
-      { pos: { x: 0, z: 0 }, facing: 0, hp: 80 },
-      { pos: { x: 300, z: 0 }, facing: Math.PI, hp: 50 },
-      { roundTick: MATCH.roundSeconds * TPS - 1 }
-    );
+    const state = makeState({ x: 0, hp: 80 }, { x: 300, hp: 50 }, {
+      roundTick: MATCH.roundSeconds * TPS - 1,
+    });
     const next = step(state, inputs());
     expect(next.phase).toBe('roundOver');
     expect(next.winner).toBe(0);
   });
 
   it('declares a draw round when hp is equal at the time limit', () => {
-    const state = makeState(
-      { pos: { x: 0, z: 0 }, facing: 0, hp: 50 },
-      { pos: { x: 300, z: 0 }, facing: Math.PI, hp: 50 },
-      { roundTick: MATCH.roundSeconds * TPS - 1 }
-    );
+    const state = makeState({ x: 0, hp: 50 }, { x: 300, hp: 50 }, {
+      roundTick: MATCH.roundSeconds * TPS - 1,
+    });
     const next = step(state, inputs());
     expect(next.phase).toBe('roundOver');
     expect(next.winner).toBeNull();

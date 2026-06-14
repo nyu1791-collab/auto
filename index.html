@@ -14,7 +14,6 @@
 
       * {
         -webkit-tap-highlight-color: transparent;
-        box-sizing: border-box;
       }
 
       html,
@@ -52,8 +51,8 @@
         touch-action: none;
       }
 
-      /* キャンバス・HUD・タッチ操作 UI を重ねるためのラッパー。
-         16:9 の比率を保ったまま画面に収まる最大サイズを取る。 */
+      /* キャンバスとタッチ操作 UI を重ねるためのラッパー。
+         800:450 (16:9) の比率を保ったまま画面に収まる最大サイズを取る。 */
       .game-viewport {
         position: relative;
         overflow: hidden;
@@ -63,202 +62,14 @@
         touch-action: none;
       }
 
-      canvas#game {
+      canvas {
         display: block;
         width: 100%;
         height: 100%;
         background: #15181d;
+        border: 1px solid #2a2f37;
+        image-rendering: auto;
         touch-action: none;
-      }
-
-      /* =================================================================
-         HUD オーバーレイ(HTML/CSS)。WebGL キャンバスの上に重ねる。
-         エンジン本体 (src/engine/**, src/sim/**) には依存しない。
-         ================================================================= */
-      .hud {
-        position: absolute;
-        inset: 0;
-        z-index: 4;
-        pointer-events: none;
-        font-family: inherit;
-      }
-
-      /* --- HP / スタミナバー(左上 P1 / 右上 P2) ----------------------- */
-      .hud-bars {
-        position: absolute;
-        top: env(safe-area-inset-top, 0px);
-        left: env(safe-area-inset-left, 0px);
-        right: env(safe-area-inset-right, 0px);
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        padding: 10px 12px;
-        gap: 12px;
-      }
-
-      .hud-player {
-        flex: 1 1 0;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        max-width: 46%;
-      }
-
-      .hud-player.hud-p1 {
-        align-items: flex-end;
-      }
-
-      .hud-name-row {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 11px;
-        font-weight: bold;
-        letter-spacing: 0.1em;
-        color: #aab2c0;
-      }
-
-      .hud-p1 .hud-name-row {
-        flex-direction: row-reverse;
-      }
-
-      .hud-wins {
-        display: flex;
-        gap: 4px;
-      }
-
-      .hud-pip {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        border: 1px solid rgba(255, 255, 255, 0.35);
-        background: rgba(255, 255, 255, 0.05);
-      }
-
-      .hud-pip-filled {
-        background: #ffe066;
-        border-color: #ffe066;
-        box-shadow: 0 0 6px rgba(255, 224, 102, 0.8);
-      }
-
-      .hud-bar-track {
-        position: relative;
-        width: 100%;
-        height: 14px;
-        border: 1px solid rgba(255, 255, 255, 0.25);
-        border-radius: 4px;
-        background: rgba(0, 0, 0, 0.45);
-        overflow: hidden;
-      }
-
-      .hud-bar-track.hud-stamina-track {
-        height: 6px;
-        margin-top: 2px;
-      }
-
-      .hud-bar-fill {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        transform-origin: left center;
-      }
-
-      .hud-p1 .hud-bar-fill {
-        transform-origin: right center;
-        right: 0;
-        left: auto;
-      }
-
-      .hud-hp-fill {
-        background: linear-gradient(90deg, #5dd6ff, #4da6ff);
-      }
-
-      .hud-hp-chip {
-        background: rgba(255, 93, 93, 0.6);
-        opacity: 0;
-      }
-
-      .hud-stamina-fill {
-        background: linear-gradient(90deg, #9dffb0, #4dff7a);
-      }
-
-      .hud-p1 .hud-hp-fill {
-        background: linear-gradient(270deg, #5dd6ff, #4da6ff);
-      }
-
-      .hud-p1 .hud-stamina-fill {
-        background: linear-gradient(270deg, #9dffb0, #4dff7a);
-      }
-
-      /* --- モード表示(画面上部中央) ----------------------------------- */
-      .hud-mode {
-        position: absolute;
-        top: env(safe-area-inset-top, 0px);
-        left: 0;
-        right: 0;
-        display: flex;
-        justify-content: center;
-        padding-top: 10px;
-        font-size: 11px;
-        color: #8a93a0;
-        text-align: center;
-        white-space: nowrap;
-      }
-
-      /* --- 中央メッセージ(READY/FIGHT/結果) ---------------------------- */
-      .hud-message {
-        position: absolute;
-        top: 38%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        text-align: center;
-        font-size: clamp(20px, 6vw, 40px);
-        font-weight: bold;
-        letter-spacing: 0.06em;
-        opacity: 0;
-        text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
-        transition: opacity 0.1s linear;
-      }
-
-      .hud-message-fight {
-        color: #ff5d5d;
-      }
-
-      .hud-message-ready {
-        color: #ffe066;
-      }
-
-      .hud-message-result {
-        color: #f4f6fb;
-        font-size: clamp(16px, 4.5vw, 30px);
-      }
-
-      .hud-restart-hint {
-        display: inline-block;
-        margin-top: 10px;
-        font-size: clamp(11px, 2.4vw, 15px);
-        color: #aab2c0;
-        font-weight: normal;
-        letter-spacing: 0.05em;
-      }
-
-      /* --- JUST! ポップ -------------------------------------------------- */
-      .hud-just {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%) scale(1);
-        font-size: clamp(28px, 8vw, 56px);
-        font-weight: bold;
-        font-style: italic;
-        color: #ffe066;
-        text-shadow: 0 0 18px rgba(255, 224, 102, 0.9);
-        opacity: 0;
-        letter-spacing: 0.05em;
-      }
-
-      .hud-just::after {
-        content: 'JUST!';
       }
 
       .controls {
@@ -276,9 +87,7 @@
         }
       }
 
-      /* =================================================================
-         タッチ操作 UI
-         ================================================================= */
+      /* --- タッチ操作 UI ---------------------------------------------- */
       .touch-controls {
         display: none;
         position: absolute;
@@ -325,7 +134,6 @@
         justify-content: center;
         gap: 8px;
         padding: 6px;
-        z-index: 11;
       }
 
       .tc-menu-row .tc-btn {
@@ -340,98 +148,103 @@
         background: rgba(0, 0, 0, 0.35);
       }
 
-      /* --- P2 操作グループ(対面プレイ用。画面上側に 180°反転配置) -------- */
-      .tc-p2-group {
+      /* --- P1 / P2 操作クラスタ --------------------------------------- */
+      .tc-cluster {
         position: absolute;
-        inset: 0;
+        bottom: env(safe-area-inset-bottom, 0px);
+        width: 50%;
+        height: 45%;
         pointer-events: none;
-        transform: rotate(180deg);
       }
 
-      .tc-p2-group.tc-hidden {
+      .tc-p1 {
+        left: env(safe-area-inset-left, 0px);
+      }
+
+      .tc-p2 {
+        right: env(safe-area-inset-right, 0px);
+      }
+
+      .tc-p2.tc-hidden {
         display: none;
       }
 
-      /* --- バーチャルスティック(左半分) -------------------------------- */
-      .tc-stick-zone {
-        position: absolute;
-        left: 0;
-        bottom: 0;
-        width: 50%;
-        height: 100%;
-        pointer-events: auto;
-        display: flex;
-        align-items: flex-end;
-        justify-content: flex-start;
-        padding: 0 0 calc(28px + env(safe-area-inset-bottom, 0px)) calc(28px + env(safe-area-inset-left, 0px));
-      }
-
-      .tc-stick-base {
-        position: relative;
-        width: 110px;
-        height: 110px;
-        border-radius: 50%;
-        border: 1px solid rgba(255, 255, 255, 0.25);
-        background: rgba(255, 255, 255, 0.06);
-      }
-
-      .tc-stick-base.tc-stick-active {
-        background: rgba(255, 255, 255, 0.12);
-        border-color: rgba(255, 255, 255, 0.4);
-      }
-
-      .tc-stick-knob {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 48px;
-        height: 48px;
-        margin: -24px 0 0 -24px;
-        border-radius: 50%;
-        background: rgba(255, 255, 255, 0.22);
-        border: 1px solid rgba(255, 255, 255, 0.45);
-        transform: translate(-50%, -50%);
-        transition: background 0.05s linear;
-      }
-
-      /* --- アクションボタン(右半分: 弱・強・回避) ---------------------- */
-      .tc-actions {
-        position: absolute;
-        right: 0;
-        bottom: 0;
-        width: 50%;
-        height: 100%;
-        pointer-events: none;
-      }
-
-      .tc-actions .tc-btn {
-        right: calc(22px + env(safe-area-inset-right, 0px));
-        bottom: calc(28px + env(safe-area-inset-bottom, 0px));
-      }
-
-      .tc-actions .tc-light {
+      /* P1: 左下に移動(◀▶)、右下に攻撃/回避ボタン */
+      .tc-p1 .tc-left {
+        left: 12px;
+        bottom: 14px;
         width: 56px;
         height: 56px;
-        right: calc(96px + env(safe-area-inset-right, 0px));
       }
 
-      .tc-actions .tc-heavy {
-        width: 64px;
-        height: 64px;
-        right: calc(18px + env(safe-area-inset-right, 0px));
-        bottom: calc(34px + env(safe-area-inset-bottom, 0px));
-        background: rgba(255, 93, 93, 0.16);
-        border-color: rgba(255, 93, 93, 0.45);
-      }
-
-      .tc-actions .tc-dodge {
+      .tc-p1 .tc-right {
+        left: 76px;
+        bottom: 14px;
         width: 56px;
         height: 56px;
-        right: calc(96px + env(safe-area-inset-right, 0px));
-        bottom: calc(96px + env(safe-area-inset-bottom, 0px));
-        font-size: 14px;
-        background: rgba(77, 166, 255, 0.16);
-        border-color: rgba(77, 166, 255, 0.45);
+      }
+
+      .tc-p1 .tc-dodge {
+        right: 12px;
+        bottom: 78px;
+        width: 68px;
+        height: 68px;
+        font-size: 15px;
+        background: rgba(77, 166, 255, 0.18);
+        border-color: rgba(77, 166, 255, 0.5);
+      }
+
+      .tc-p1 .tc-light {
+        right: 90px;
+        bottom: 14px;
+        width: 52px;
+        height: 52px;
+      }
+
+      .tc-p1 .tc-heavy {
+        right: 18px;
+        bottom: 14px;
+        width: 52px;
+        height: 52px;
+      }
+
+      /* P2: 左右反転した配置(対面プレイ用) */
+      .tc-p2 .tc-left {
+        right: 76px;
+        bottom: 14px;
+        width: 56px;
+        height: 56px;
+      }
+
+      .tc-p2 .tc-right {
+        right: 12px;
+        bottom: 14px;
+        width: 56px;
+        height: 56px;
+      }
+
+      .tc-p2 .tc-dodge {
+        left: 12px;
+        bottom: 78px;
+        width: 68px;
+        height: 68px;
+        font-size: 15px;
+        background: rgba(255, 93, 93, 0.18);
+        border-color: rgba(255, 93, 93, 0.5);
+      }
+
+      .tc-p2 .tc-light {
+        left: 90px;
+        bottom: 14px;
+        width: 52px;
+        height: 52px;
+      }
+
+      .tc-p2 .tc-heavy {
+        left: 18px;
+        bottom: 14px;
+        width: 52px;
+        height: 52px;
       }
 
       /* --- 縦持ち回転案内 ---------------------------------------------- */
@@ -472,54 +285,11 @@
     </div>
     <div class="game-shell">
       <div class="game-viewport" id="game-viewport">
-        <canvas id="game"></canvas>
-
-        <!-- HUD オーバーレイ(HTML/CSS のみ。エンジンには依存しない) -->
-        <div class="hud" id="hud">
-          <div class="hud-bars">
-            <div class="hud-player hud-p0">
-              <div class="hud-name-row">
-                <span>PLAYER 1</span>
-                <div class="hud-wins" id="hud-p0-wins">
-                  <div class="hud-pip"></div>
-                  <div class="hud-pip"></div>
-                </div>
-              </div>
-              <div class="hud-bar-track">
-                <div class="hud-bar-fill hud-hp-chip" id="hud-p0-hp-chip"></div>
-                <div class="hud-bar-fill hud-hp-fill" id="hud-p0-hp"></div>
-              </div>
-              <div class="hud-bar-track hud-stamina-track">
-                <div class="hud-bar-fill hud-stamina-fill" id="hud-p0-stamina"></div>
-              </div>
-            </div>
-            <div class="hud-player hud-p1">
-              <div class="hud-name-row">
-                <span>PLAYER 2</span>
-                <div class="hud-wins" id="hud-p1-wins">
-                  <div class="hud-pip"></div>
-                  <div class="hud-pip"></div>
-                </div>
-              </div>
-              <div class="hud-bar-track">
-                <div class="hud-bar-fill hud-hp-chip" id="hud-p1-hp-chip"></div>
-                <div class="hud-bar-fill hud-hp-fill" id="hud-p1-hp"></div>
-              </div>
-              <div class="hud-bar-track hud-stamina-track">
-                <div class="hud-bar-fill hud-stamina-fill" id="hud-p1-stamina"></div>
-              </div>
-            </div>
-          </div>
-
-          <div class="hud-mode" id="hud-mode"></div>
-          <div class="hud-message" id="hud-message"></div>
-          <div class="hud-just" id="hud-just"></div>
-        </div>
+        <canvas id="game" width="800" height="450"></canvas>
       </div>
     </div>
     <div class="controls">
-      P1: WASD 移動(画面基準) · Shift 回避 · F 弱 · G 強 &nbsp;|&nbsp; P2: ←→↑↓
-      移動 · / 回避 · K 弱 · L 強
+      P1: A/D 移動 · W 回避 · F 弱 · G 強 &nbsp;|&nbsp; P2: ←/→ 移動 · ↑ 回避 · K 弱 · L 強
       <br />
       C: CPU対戦 / 2P対戦 切替(デフォルトは CPU 対戦) &nbsp;|&nbsp; V:
       CPU難易度切替(EASY/NORMAL/HARD) &nbsp;|&nbsp; M: ミュート切替 &nbsp;|&nbsp; Enter:

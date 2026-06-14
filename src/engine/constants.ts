@@ -5,15 +5,12 @@
 
 export const TPS = 60;
 
-/**
- * 円形アリーナ。中心が原点 (0,0)、地面は x-z 平面(y は常に 0)。
- * プレイヤー中心は `hypot(x,z) <= radius - playerRadius` に拘束される。
- */
 export const ARENA = {
-  /** アリーナ円の半径 */
-  radius: 320,
-  /** プレイヤーの当たり半径 */
-  playerRadius: 16,
+  width: 800,
+  /** プレイヤーの一辺(px) */
+  playerSize: 40,
+  /** 床の Y 座標(描画基準。ロジックは X のみ使用) */
+  floorY: 360,
 } as const;
 
 export const PLAYER = {
@@ -21,7 +18,7 @@ export const PLAYER = {
   maxStamina: 100,
   /** スタミナ自然回復: 25/sec を tick あたりに換算 */
   staminaRegenPerTick: 25 / TPS,
-  /** 通常移動速度(ワールド単位/tick) */
+  /** 通常移動速度 px/tick */
   moveSpeed: 3,
 } as const;
 
@@ -31,13 +28,11 @@ export interface AttackSpec {
   recovery: number;
   damage: number;
   range: number;
-  /** 攻撃が有効な扇形の半角(ラジアン)。aimAngle ± arcHalfAngle 内のみ命中する */
-  arcHalfAngle: number;
 }
 
 export const ATTACKS: Record<'light' | 'heavy', AttackSpec> = {
-  light: { windup: 9, active: 2, recovery: 12, damage: 10, range: 70, arcHalfAngle: 0.6 },
-  heavy: { windup: 27, active: 3, recovery: 30, damage: 30, range: 90, arcHalfAngle: 0.52 },
+  light: { windup: 9, active: 2, recovery: 12, damage: 10, range: 70 },
+  heavy: { windup: 27, active: 3, recovery: 30, damage: 30, range: 90 },
 } as const;
 
 export const DODGE = {
@@ -50,8 +45,8 @@ export const DODGE = {
   /** スタミナ消費 */
   staminaCost: 35,
   /**
-   * i-frame 中の移動速度(ワールド単位/tick)。
-   * i-frame 中(最大 iframes tick)の総移動量が攻撃の間合い(70-90px相当)を
+   * i-frame 中の移動速度 px/tick。
+   * i-frame 中(最大 iframes tick)の総移動量が攻撃の間合い(70-90px)を
    * 大きく超えないようにする(超えると「i-frame による無効化」ではなく
    * 「間合い外への移動による空振り」になり、ジャスト回避が成立しなくなる)。
    */

@@ -1,21 +1,14 @@
 import { ARENA, ATTACKS, DODGE, MATCH, PLAYER, TPS } from './constants';
 import { resolveAttackTick } from './combat';
 import { resetRound } from './state';
-import type { GameState, Inputs, PlayerState, Vec2 } from './types';
-
-const MOVE_EPSILON = 1e-4;
+import type { GameState, Inputs, PlayerState } from './types';
 
 function isLocked(p: PlayerState): boolean {
   return p.attack !== null || p.dodge !== null || p.stunTicks > 0;
 }
 
-/** 円形アリーナの拘束: プレイヤー中心を `hypot(x,z) <= radius - playerRadius` に収める */
-function clampToArena(pos: Vec2): Vec2 {
-  const limit = ARENA.radius - ARENA.playerRadius;
-  const dist = Math.hypot(pos.x, pos.z);
-  if (dist <= limit || dist === 0) return pos;
-  const scale = limit / dist;
-  return { x: pos.x * scale, z: pos.z * scale };
+function clampX(x: number): number {
+  return Math.max(0, Math.min(ARENA.width - ARENA.playerSize, x));
 }
 
 /** 1 tick 分の状態遷移。フェーズ終了後は呼び出し側が再度 step を呼ぶことで
@@ -46,18 +39,8 @@ export function step(state: GameState, inputs: Inputs): GameState {
   }
 
   const players: [PlayerState, PlayerState] = [
-    {
-      ...state.players[0],
-      pos: { ...state.players[0].pos },
-      attack: cloneAttack(state.players[0]),
-      dodge: cloneDodge(state.players[0]),
-    },
-    {
-      ...state.players[1],
-      pos: { ...state.players[1].pos },
-      attack: cloneAttack(state.players[1]),
-      dodge: cloneDodge(state.players[1]),
-    },
+    { ...state.players[0], attack: cloneAttack(state.players[0]), dodge: cloneDodge(state.players[0]) },
+    { ...state.players[1], attack: cloneAttack(state.players[1]), dodge: cloneDodge(state.players[1]) },
   ];
 
   for (const p of players) {
@@ -69,9 +52,8 @@ export function step(state: GameState, inputs: Inputs): GameState {
   for (let i = 0; i < 2; i++) {
     const p = players[i];
     const o = players[1 - i];
-    const dx = o.pos.x - p.pos.x;
-    const dz = o.pos.z - p.pos.z;
-    if (dx !== 0 || dz !== 0) p.facing = Math.atan2(dz, dx);
+    const dx = o.x - p.x;
+    if (dx !== 0) p.facing = dx > 0 ? 1 : -1;
   }
 
   // 新規アクション開始(攻撃・回避)。通常移動は判定後にまとめて行う。
@@ -81,24 +63,10 @@ export function step(state: GameState, inputs: Inputs): GameState {
     if (isLocked(p)) continue;
 
     if (input.attack !== null) {
-      p.attack = { kind: input.attack, elapsed: 0, hasHit: false, aimAngle: p.facing };
+      p.attack = { kind: input.attack, elapsed: 0, hasHit: false };
     } else if (input.dodge && p.dodgeCooldown === 0 && p.stamina >= DODGE.staminaCost) {
       p.stamina -= DODGE.staminaCost;
-
-      // 回避ダッシュ方向: 移動入力があればその方向(ワールド相対)、
-      // 無ければ相手と反対方向(バックステップ)へ。
-      const moveMag = Math.hypot(input.move.x, input.move.z);
-      let dirX: number;
-      let dirZ: number;
-      if (moveMag > MOVE_EPSILON) {
-        dirX = input.move.x / moveMag;
-        dirZ = input.move.z / moveMag;
-      } else {
-        dirX = -Math.cos(p.facing);
-        dirZ = -Math.sin(p.facing);
-      }
-
-      p.dodge = { elapsed: 0, startedAtTick: state.tick, dirX, dirZ };
+      p.dodge = { elapsed: 0, startedAtTick: state.tick };
     }
   }
 
@@ -127,34 +95,19 @@ export function step(state: GameState, inputs: Inputs): GameState {
     }
   }
 
-  // 移動: 回避 i-frame 中は決定済みのダッシュ方向へ、それ以外は画面(ワールド)相対の通常移動
+  // 移動: 回避 i-frame 中は相手から離れる方向へダッシュ、それ以外は通常移動
   for (let i = 0; i < 2; i++) {
     const p = players[i];
     const input = inputs[i];
 
     if (p.dodge && p.dodge.elapsed < DODGE.iframes) {
-      p.pos = clampToArena({
-        x: p.pos.x + p.dodge.dirX * DODGE.dashSpeed,
-        z: p.pos.z + p.dodge.dirZ * DODGE.dashSpeed,
-      });
+      p.x = clampX(p.x - p.facing * DODGE.dashSpeed);
       continue;
     }
     if (p.attack || p.dodge || p.stunTicks > 0) continue;
 
-    // 移動は画面(ワールド)相対。ロックオン(facing)は移動には影響しない。
-    let dx = input.move.x;
-    let dz = input.move.z;
-    const mag = Math.hypot(dx, dz);
-    if (mag > 1) {
-      dx /= mag;
-      dz /= mag;
-    }
-
-    if (dx !== 0 || dz !== 0) {
-      p.pos = clampToArena({
-        x: p.pos.x + dx * PLAYER.moveSpeed,
-        z: p.pos.z + dz * PLAYER.moveSpeed,
-      });
+    if (input.move !== 0) {
+      p.x = clampX(p.x + input.move * PLAYER.moveSpeed);
     }
   }
 

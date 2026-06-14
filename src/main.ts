@@ -1,4 +1,4 @@
-import { ATTACKS, TPS } from './engine/constants';
+import { ARENA, ATTACKS, TPS } from './engine/constants';
 import { step } from './engine/engine';
 import { createInitialState } from './engine/state';
 import type { GameState, Inputs } from './engine/types';
@@ -7,26 +7,15 @@ import { InputManager } from './input/input';
 import { TouchControls } from './input/touch';
 import { ParticleSystem } from './render/particles';
 import { Renderer, type RenderEffects } from './render/renderer';
-import { Hud } from './render/hud';
 import { CPU_DIFFICULTIES, cpuBot, type CpuDifficulty } from './sim/bot';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const viewport = document.getElementById('game-viewport') ?? document.body;
-const hudRoot = document.getElementById('hud') ?? document.body;
-
 const renderer = new Renderer(canvas);
 const input = new InputManager(window);
 const audio = new AudioEngine();
 const particles = new ParticleSystem();
 const touch = new TouchControls(input, viewport);
-const hud = new Hud(hudRoot);
-
-renderer.addParticles(particles);
-
-// キャンバスのリサイズに追従してカメラの aspect を更新する
-const resizeObserver = new ResizeObserver(() => renderer.handleResize());
-resizeObserver.observe(canvas);
-window.addEventListener('resize', () => renderer.handleResize());
 
 // 最初のユーザー操作で AudioContext をアンロックする(iOS Safari 対策)。
 // 一度実行したら自身を解除する。
@@ -65,7 +54,6 @@ const HITSTOP_MS = 120;
 let hitstopRemaining = 0;
 
 // --- 画面エフェクト -----------------------------------------------------
-const SHAKE_MAGNITUDE_SCALE = 4; // HP1あたりのシェイク強さ(ワールド単位)
 const SHAKE_MS = 200;
 const FLASH_MS = 100;
 const JUST_TEXT_MS = 500;
@@ -75,9 +63,9 @@ let shakeMagnitude = 0;
 let flashRemaining = 0;
 let justTextRemaining = 0;
 
-/** プレイヤーの中心ワールド座標(パーティクル発生位置の基準。地面からやや上) */
-function playerCenter(p: GameState['players'][number]): { x: number; y: number; z: number } {
-  return { x: p.pos.x, y: 18, z: p.pos.z };
+/** プレイヤーの中心座標(パーティクル発生位置の基準) */
+function playerCenter(p: GameState['players'][number]): { x: number; y: number } {
+  return { x: p.x + ARENA.playerSize / 2, y: ARENA.floorY + ARENA.playerSize / 2 };
 }
 
 /**
@@ -99,21 +87,21 @@ function detectEvents(prev: GameState, next: GameState): void {
       justTextRemaining = Math.max(justTextRemaining, JUST_TEXT_MS);
 
       // バーストは「決めた」側(防御側 = 相手)の位置に出す
-      const c = playerCenter(opponent);
-      particles.burst(c.x, c.y, c.z, 0xffe066, 28);
+      const defenderCenter = playerCenter(opponent);
+      particles.burst(defenderCenter.x, defenderCenter.y, '#ffe066', 24);
       audio.just();
     }
 
     // 被弾: HP が減少した tick
     if (after.hp < before.hp) {
       shakeRemaining = Math.max(shakeRemaining, SHAKE_MS);
-      shakeMagnitude = Math.min(10, before.hp - after.hp) * SHAKE_MAGNITUDE_SCALE;
+      shakeMagnitude = Math.min(10, before.hp - after.hp);
 
-      const c = playerCenter(after);
+      const center = playerCenter(after);
       const damage = before.hp - after.hp;
       const kind = damage >= ATTACKS.heavy.damage ? 'heavy' : 'light';
-      const color = i === 0 ? 0x4da6ff : 0xff5d5d;
-      particles.sparks(c.x, c.y, c.z, color, kind === 'heavy' ? 26 : 14);
+      const color = i === 0 ? '#4da6ff' : '#ff5d5d';
+      particles.sparks(center.x, center.y, color, kind === 'heavy' ? 20 : 12);
       audio.hit(kind);
     }
 
@@ -124,8 +112,9 @@ function detectEvents(prev: GameState, next: GameState): void {
 
     // 回避発生(elapsed === 1 の tick が「開始した」瞬間)
     if (after.dodge && after.dodge.elapsed === 1 && !before.dodge) {
-      const c = playerCenter(after);
-      particles.dust(c.x, c.y, c.z, after.dodge.dirX, after.dodge.dirZ);
+      const center = playerCenter(after);
+      // facing の逆方向(回避ダッシュの進行方向)へ砂塵を出す
+      particles.dust(center.x, center.y, after.facing);
       audio.dodge();
     }
   }
@@ -215,6 +204,7 @@ function loop(now: number): void {
 
   const effects: RenderEffects = {
     modeLabel: `${modeLabel}  ${muteIcon} M:ミュート`,
+    worldOverlay: (ctx) => particles.draw(ctx),
   };
 
   if (shakeRemaining > 0) {
@@ -232,7 +222,6 @@ function loop(now: number): void {
   }
 
   renderer.render(state, effects, delta);
-  hud.update(state, effects, delta);
   requestAnimationFrame(loop);
 }
 

@@ -1,565 +1,539 @@
-/**
- * Three.js による 3D レンダラー(マインクラフト風)。
- *
- * - ボクセル(ブロック)人型キャラクター(頭・胴・腕・脚)に歩行/攻撃アニメーション。
- * - 草・土のブロック地面 + 青空 + 太陽光 + ソフトシャドウ。
- * - 攻撃テレグラフ(地面の扇形)で、ジャスト回避とサイドステップの読み合いを可視化。
- *
- * カメラは「+Z 側からアリーナ中心(-Z 方向)を見下ろす固定アングル」で、
- * Y 軸回転はしない。これにより「画面上 = ワールド -z / 画面右 = ワールド +x」が
- * 常に成立し、入力(画面相対の move)と見た目が一致する。
- *
- * DOM / WebGL に依存するため、`src/engine/**`・`src/sim/**` からは import しないこと。
- */
-
-import * as THREE from 'three';
-import { ARENA, ATTACKS, DODGE } from '../engine/constants';
+import { ARENA, ATTACKS, DODGE, MATCH, PLAYER } from '../engine/constants';
 import type { GameState, PlayerState } from '../engine/types';
-import type { ParticleSystem } from './particles';
+
+const COLORS = {
+  p0: '#4da6ff',
+  p0Dark: '#1f5c99',
+  p0Light: '#a8d4ff',
+  p1: '#ff5d5d',
+  p1Dark: '#992f2f',
+  p1Light: '#ffc2c2',
+  bgTop: '#1c2230',
+  bgBottom: '#0c0e13',
+  ground: '#2a2f37',
+  groundLine: '#3a4250',
+  hpBack: '#3a3f47',
+  hpChip: '#ffd2a0',
+  staminaBack: '#3a3f47',
+  staminaFill: '#f0c419',
+  hitbox: 'rgba(255,255,255,0.2)',
+  stunned: '#ffffff',
+  telegraphLight: '255, 224, 102',
+  telegraphHeavy: '255, 70, 60',
+  pipFill: '#ffe066',
+  pipEmpty: 'rgba(255,255,255,0.15)',
+};
+
+/** HP バーの表示値が実値に追従する速度(1 フレームあたりの割合) */
+const HP_LERP_RATE = 0.12;
+/** チップダメージ表示が消えるまでの時間(ms) */
+const CHIP_DECAY_MS = 600;
 
 /**
  * main.ts のエフェクトレイヤーから渡される、tick 間の一時的な見た目情報。
  * エンジン状態には含まれない(エンジンの純粋性を保つ)。
  */
 export interface RenderEffects {
-  /** カメラシェイクのオフセット(ワールド単位) */
+  /** 画面シェイクのオフセット(px) */
   shakeX?: number;
   shakeY?: number;
-  /** 全体フラッシュの強さ (0-1) */
+  /** 全体フラッシュの強さ (0-1)。ジャスト回避時の白フラッシュなど */
   flashAlpha?: number;
-  /** 「JUST!」テキストの表示強度 (0-1)。HUD 側で使用 */
+  /** 「JUST!」テキストの表示強度 (0-1)。0 なら非表示 */
   justTextAlpha?: number;
-  /** 現在のモード表示 */
+  /** 現在のモード表示("VS CPU" / "VS PLAYER") */
   modeLabel?: string;
+  /**
+   * ワールド座標系(シェイク変換の内側)に追加描画するためのフック。
+   * 攻撃判定やテレグラフより後、HUD より前に呼び出される
+   * (パーティクルなどを画面シェイクと一致させつつ、キャラクターより前面に出すため)。
+   */
+  worldOverlay?: (ctx: CanvasRenderingContext2D) => void;
 }
 
-const COLORS = {
-  // チーム色(シャツ)
-  p0Shirt: 0x3aa0ff,
-  p0Pants: 0x274690,
-  p1Shirt: 0xff5a5a,
-  p1Pants: 0x8a2f2f,
-  skin: 0xd9a06a,
-  hair: 0x5a3a22,
-  eyeWhite: 0xf5f5f5,
-  eyePupil: 0x3a2a6a,
-  // 地面
-  grassTop: 0x6abe4f,
-  grassTop2: 0x5aae42,
-  dirt: 0x80592f,
-  dirt2: 0x6f4c27,
-  stone: 0x9098a0,
-  trunk: 0x6b4a2b,
-  leaves: 0x4f9d3a,
-  // 演出
-  telegraphLight: 0xffe066,
-  telegraphHeavy: 0xff5030,
-  sky: 0x8fc6ff,
-  stunned: 0xffffff,
-};
-
-/** ボクセル人型 1 体分のメッシュ・ピボット・アニメーション状態 */
-interface CharacterRig {
-  group: THREE.Group;
-  /** 脚・腕のスイング用ピボット */
-  legL: THREE.Group;
-  legR: THREE.Group;
-  armL: THREE.Group;
-  armR: THREE.Group;
-  /** 色替え・透明化の対象となる全メッシュ */
-  meshes: THREE.Mesh[];
-  /** 攻撃時に発光させる胴・腕のマテリアル */
-  shirtMats: THREE.MeshStandardMaterial[];
-  shirtColor: number;
-  /** 歩行アニメーションの位相と振幅 */
-  walkPhase: number;
-  swingAmp: number;
-  /** 直前フレームのワールド位置(移動量=歩行速度の算出用) */
-  lastX: number;
-  lastZ: number;
-  afterimages: THREE.Mesh[];
-}
-
-/** 1 ブロック分のワールドサイズ係数 */
-const U = 1.7;
-
-/** GameState を 3D 描画するレンダラー */
+/** GameState を Canvas に描画する */
 export class Renderer {
-  private renderer: THREE.WebGLRenderer;
-  private scene: THREE.Scene;
-  private camera: THREE.PerspectiveCamera;
+  private ctx: CanvasRenderingContext2D;
 
-  private p0: CharacterRig;
-  private p1: CharacterRig;
-
-  private telegraphP0: THREE.Mesh;
-  private telegraphP1: THREE.Mesh;
-
-  private flashOverlay: HTMLDivElement;
-
-  private lookTarget = new THREE.Vector3(0, 0, 0);
-  private camDistance = 520;
+  /** HUD の HP バーが実値へ滑らかに追従するための表示用 HP(プレイヤーごと) */
+  private displayedHp: [number, number] = [PLAYER.maxHp, PLAYER.maxHp];
+  /** 「チップダメージ」表示(直前の減少分)の残り時間(ms)。プレイヤーごと */
+  private chipRemaining: [number, number] = [0, 0];
+  /** 背景の微妙なアニメーション用の時間累積(ms)。描画のみに使用、ロジックには影響しない */
   private time = 0;
 
   constructor(private canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-    this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(COLORS.sky);
-    this.scene.fog = new THREE.Fog(COLORS.sky, 900, 2400);
-
-    this.camera = new THREE.PerspectiveCamera(45, 16 / 9, 1, 5000);
-
-    this.setupLights();
-    this.buildWorld();
-
-    this.p0 = this.buildCharacter(0);
-    this.p1 = this.buildCharacter(1);
-    this.scene.add(this.p0.group, this.p1.group);
-
-    this.telegraphP0 = this.buildTelegraph();
-    this.telegraphP1 = this.buildTelegraph();
-    this.scene.add(this.telegraphP0, this.telegraphP1);
-
-    this.flashOverlay = document.createElement('div');
-    this.flashOverlay.style.position = 'absolute';
-    this.flashOverlay.style.inset = '0';
-    this.flashOverlay.style.background = '#ffffff';
-    this.flashOverlay.style.opacity = '0';
-    this.flashOverlay.style.pointerEvents = 'none';
-    this.flashOverlay.style.zIndex = '5';
-    canvas.parentElement?.appendChild(this.flashOverlay);
-
-    this.handleResize();
-  }
-
-  /** パーティクルシステムをシーンに統合する */
-  addParticles(particles: ParticleSystem): void {
-    this.scene.add(particles.object3D);
-  }
-
-  handleResize(): void {
-    const { clientWidth, clientHeight } = this.canvas;
-    const width = Math.max(1, clientWidth);
-    const height = Math.max(1, clientHeight);
-    this.renderer.setSize(width, height, false);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
-  }
-
-  dispose(): void {
-    this.renderer.dispose();
-    this.flashOverlay.remove();
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('2D canvas context unavailable');
+    this.ctx = ctx;
   }
 
   render(state: GameState, effects: RenderEffects = {}, dtMs = 16.7): void {
+    const { ctx } = this;
+
     this.time += dtMs;
+    this.updateHpDisplay(state, dtMs);
 
-    this.updateCharacter(this.p0, state.players[0]);
-    this.updateCharacter(this.p1, state.players[1]);
-    this.updateTelegraph(this.telegraphP0, state.players[0]);
-    this.updateTelegraph(this.telegraphP1, state.players[1]);
-    this.updateCamera(state, effects);
+    ctx.save();
+    ctx.translate(effects.shakeX ?? 0, effects.shakeY ?? 0);
 
-    this.flashOverlay.style.opacity =
-      effects.flashAlpha && effects.flashAlpha > 0 ? String(Math.min(1, effects.flashAlpha)) : '0';
+    this.drawBackground();
 
-    this.renderer.render(this.scene, this.camera);
+    for (const p of state.players) this.drawShadow(p);
+    for (const p of state.players) this.drawDodgeAfterimage(p);
+    for (const p of state.players) this.drawTelegraph(p);
+    for (const p of state.players) this.drawAttackRange(p);
+    for (const p of state.players) this.drawPlayer(p);
+
+    effects.worldOverlay?.(ctx);
+
+    this.drawHud(state);
+    this.drawMessage(state);
+    this.drawModeLabel(effects.modeLabel);
+    this.drawJustText(effects.justTextAlpha);
+
+    ctx.restore();
+
+    this.drawFlash(effects.flashAlpha);
   }
 
-  // --- ライティング ------------------------------------------------------
+  /** displayedHp / chipDamage を実値に向けて滑らかに更新する(描画専用の状態) */
+  private updateHpDisplay(state: GameState, dtMs: number): void {
+    const frames = Math.max(1, dtMs / 16.7);
+    for (let i = 0; i < 2; i++) {
+      const real = Math.max(0, state.players[i].hp);
+      const prevDisplayed = this.displayedHp[i];
 
-  private setupLights(): void {
-    // 空と地面からの環境光(屋外らしい柔らかさ)
-    const hemi = new THREE.HemisphereLight(0xbfe3ff, 0x4a7a3a, 0.85);
-    this.scene.add(hemi);
+      if (real < prevDisplayed - 0.01) {
+        // ダメージを受けた分を「チップダメージ」として一時的に表示する
+        this.chipRemaining[i] = CHIP_DECAY_MS;
+      }
 
-    // 太陽(暖色の方向光 + 影)
-    const sun = new THREE.DirectionalLight(0xfff2d6, 1.15);
-    sun.position.set(280, 520, 200);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.near = 10;
-    sun.shadow.camera.far = 1600;
-    const s = ARENA.radius + 120;
-    sun.shadow.camera.left = -s;
-    sun.shadow.camera.right = s;
-    sun.shadow.camera.top = s;
-    sun.shadow.camera.bottom = -s;
-    sun.shadow.bias = -0.0004;
-    this.scene.add(sun);
-  }
+      const rate = Math.min(1, HP_LERP_RATE * frames);
+      this.displayedHp[i] = prevDisplayed + (real - prevDisplayed) * rate;
+      if (Math.abs(this.displayedHp[i] - real) < 0.05) this.displayedHp[i] = real;
 
-  // --- ワールド(地面・装飾) ---------------------------------------------
-
-  private buildWorld(): void {
-    // 草原(広い地面)
-    const grassTex = this.makeBlockTexture([COLORS.grassTop, COLORS.grassTop2], 0.5);
-    grassTex.repeat.set(60, 60);
-    const groundGeo = new THREE.PlaneGeometry(4000, 4000);
-    const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, metalness: 0 });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
-
-    // アリーナ床(ごく薄い土の円盤を草原の上に乗せ、戦闘エリアを示す)
-    const padTex = this.makeBlockTexture([COLORS.dirt, COLORS.dirt2], 0.5);
-    padTex.repeat.set(10, 10);
-    const padGeo = new THREE.CylinderGeometry(ARENA.radius, ARENA.radius, 6, 56);
-    const padMat = new THREE.MeshStandardMaterial({ map: padTex, roughness: 1 });
-    const pad = new THREE.Mesh(padGeo, padMat);
-    pad.position.y = 3;
-    pad.receiveShadow = true;
-    this.scene.add(pad);
-
-    // 戦闘エリアの境界を示す石ブロックのリング
-    const stoneGeo = new THREE.BoxGeometry(22, 16, 22);
-    const stoneMat = new THREE.MeshStandardMaterial({ color: COLORS.stone, roughness: 1, flatShading: true });
-    const ringBlocks = 36;
-    for (let i = 0; i < ringBlocks; i++) {
-      const a = (i / ringBlocks) * Math.PI * 2;
-      const block = new THREE.Mesh(stoneGeo, stoneMat);
-      block.position.set(Math.cos(a) * ARENA.radius, 8, Math.sin(a) * ARENA.radius);
-      block.rotation.y = a;
-      block.castShadow = true;
-      block.receiveShadow = true;
-      this.scene.add(block);
-    }
-
-    // 外周の装飾(木)を数本配置
-    const treeSpots: [number, number][] = [
-      [-1.9, 1.4],
-      [2.2, 0.6],
-      [-0.6, -2.3],
-      [1.4, -1.8],
-      [-2.4, -0.5],
-    ];
-    for (const [ax, az] of treeSpots) {
-      const r = ARENA.radius + 180 + Math.abs(ax * az) * 30;
-      this.scene.add(this.buildTree(ax * r * 0.4, az * r * 0.4));
-    }
-  }
-
-  /** ブロック模様(2色のピクセル格子)の CanvasTexture を生成する */
-  private makeBlockTexture(colors: [number, number], variance: number): THREE.Texture {
-    const size = 64;
-    const cells = 8;
-    const cell = size / cells;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d')!;
-    const c0 = new THREE.Color(colors[0]);
-    const c1 = new THREE.Color(colors[1]);
-    for (let y = 0; y < cells; y++) {
-      for (let x = 0; x < cells; x++) {
-        const t = Math.random() * variance;
-        const base = (x + y) % 2 === 0 ? c0 : c1;
-        const col = base.clone().offsetHSL(0, 0, (Math.random() - 0.5) * 0.06 - t * 0.04);
-        ctx.fillStyle = `#${col.getHexString()}`;
-        ctx.fillRect(x * cell, y * cell, cell, cell);
+      if (this.chipRemaining[i] > 0) {
+        this.chipRemaining[i] = Math.max(0, this.chipRemaining[i] - dtMs);
       }
     }
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.magFilter = THREE.NearestFilter;
-    tex.minFilter = THREE.NearestFilter;
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    return tex;
   }
 
-  private buildTree(x: number, z: number): THREE.Group {
-    const tree = new THREE.Group();
-    const trunkMat = new THREE.MeshStandardMaterial({ color: COLORS.trunk, roughness: 1, flatShading: true });
-    const leafMat = new THREE.MeshStandardMaterial({ color: COLORS.leaves, roughness: 1, flatShading: true });
-    const trunk = new THREE.Mesh(new THREE.BoxGeometry(16, 70, 16), trunkMat);
-    trunk.position.y = 35;
-    trunk.castShadow = true;
-    tree.add(trunk);
-    const leaves = new THREE.Mesh(new THREE.BoxGeometry(70, 56, 70), leafMat);
-    leaves.position.y = 92;
-    leaves.castShadow = true;
-    tree.add(leaves);
-    tree.position.set(x, 0, z);
-    return tree;
+  /** 背景: グラデーション + 微妙な地平線のアニメーション + 床 */
+  private drawBackground(): void {
+    const { ctx, canvas } = this;
+
+    const bg = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    bg.addColorStop(0, COLORS.bgTop);
+    bg.addColorStop(1, COLORS.bgBottom);
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // ごく緩やかに明滅する地平線(ロジックに影響しない演出のみ)
+    const pulse = 0.5 + 0.5 * Math.sin(this.time / 4000);
+    ctx.fillStyle = `rgba(255,255,255,${(0.02 + pulse * 0.015).toFixed(3)})`;
+    ctx.fillRect(0, ARENA.floorY - 2, canvas.width, 1);
+
+    // 床
+    const floorY = ARENA.floorY + ARENA.playerSize;
+    const ground = ctx.createLinearGradient(0, floorY, 0, canvas.height);
+    ground.addColorStop(0, COLORS.ground);
+    ground.addColorStop(1, COLORS.bgBottom);
+    ctx.fillStyle = ground;
+    ctx.fillRect(0, floorY, canvas.width, canvas.height - floorY);
+
+    ctx.fillStyle = COLORS.groundLine;
+    ctx.fillRect(0, floorY, canvas.width, 2);
   }
 
-  // --- キャラクター --------------------------------------------------------
+  /** 各ファイターの足元に柔らかい影を描く */
+  private drawShadow(p: PlayerState): void {
+    const { ctx } = this;
+    const cx = p.x + ARENA.playerSize / 2;
+    const cy = ARENA.floorY + ARENA.playerSize + 4;
 
-  private buildCharacter(id: 0 | 1): CharacterRig {
-    const shirtColor = id === 0 ? COLORS.p0Shirt : COLORS.p1Shirt;
-    const pantsColor = id === 0 ? COLORS.p0Pants : COLORS.p1Pants;
-
-    const legW = 4 * U;
-    const legH = 12 * U;
-    const legD = 4 * U;
-    const bodyW = 8 * U;
-    const bodyH = 12 * U;
-    const bodyD = 4 * U;
-    const armW = 4 * U;
-    const armH = 12 * U;
-    const head = 8 * U;
-
-    const group = new THREE.Group();
-    const meshes: THREE.Mesh[] = [];
-    const shirtMats: THREE.MeshStandardMaterial[] = [];
-
-    const mat = (color: number): THREE.MeshStandardMaterial =>
-      new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0, flatShading: true });
-
-    const addMesh = (
-      parent: THREE.Object3D,
-      w: number,
-      h: number,
-      d: number,
-      material: THREE.MeshStandardMaterial,
-      x: number,
-      y: number,
-      z: number
-    ): THREE.Mesh => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
-      m.position.set(x, y, z);
-      m.castShadow = true;
-      m.receiveShadow = true;
-      parent.add(m);
-      meshes.push(m);
-      return m;
-    };
-
-    // 脚(股関節を中心に前後スイングするピボット)
-    const shirtMatL = mat(pantsColor);
-    const legL = new THREE.Group();
-    legL.position.set(-legW / 2, legH, 0);
-    addMesh(legL, legW, legH, legD, shirtMatL, 0, -legH / 2, 0);
-    group.add(legL);
-
-    const legR = new THREE.Group();
-    legR.position.set(legW / 2, legH, 0);
-    addMesh(legR, legW, legH, legD, mat(pantsColor), 0, -legH / 2, 0);
-    group.add(legR);
-
-    // 胴(シャツ色)
-    const bodyMat = mat(shirtColor);
-    shirtMats.push(bodyMat);
-    addMesh(group, bodyW, bodyH, bodyD, bodyMat, 0, legH + bodyH / 2, 0);
-
-    // 腕(肩を中心にスイング。シャツ色 + 先端に肌色の手)
-    const shoulderY = legH + bodyH;
-    const armLMat = mat(shirtColor);
-    shirtMats.push(armLMat);
-    const armL = new THREE.Group();
-    armL.position.set(-(bodyW / 2 + armW / 2), shoulderY, 0);
-    addMesh(armL, armW, armH * 0.78, armW, armLMat, 0, -armH * 0.39, 0);
-    addMesh(armL, armW, armH * 0.22, armW, mat(COLORS.skin), 0, -armH * 0.89, 0);
-    group.add(armL);
-
-    const armRMat = mat(shirtColor);
-    shirtMats.push(armRMat);
-    const armR = new THREE.Group();
-    armR.position.set(bodyW / 2 + armW / 2, shoulderY, 0);
-    addMesh(armR, armW, armH * 0.78, armW, armRMat, 0, -armH * 0.39, 0);
-    addMesh(armR, armW, armH * 0.22, armW, mat(COLORS.skin), 0, -armH * 0.89, 0);
-    group.add(armR);
-
-    // 頭(肌色)+ 髪 + 顔(目)。正面は +x。
-    const headY = legH + bodyH + head / 2;
-    addMesh(group, head, head, head, mat(COLORS.skin), 0, headY, 0);
-    // 髪(上面と後頭部)
-    const hairMat = mat(COLORS.hair);
-    addMesh(group, head * 1.04, head * 0.32, head * 1.04, hairMat, 0, headY + head * 0.36, 0);
-    addMesh(group, head * 0.28, head * 0.7, head * 1.04, hairMat, -head * 0.4, headY, 0);
-    // 目(白 + 瞳)。+x 面に貼る。
-    const eyeZ = head * 0.22;
-    const eyeY = headY + head * 0.08;
-    const eyeX = head / 2 + 0.3;
-    for (const sign of [-1, 1]) {
-      addMesh(group, 1.2, head * 0.18, head * 0.16, mat(COLORS.eyeWhite), eyeX, eyeY, sign * eyeZ);
-      addMesh(group, 1.4, head * 0.1, head * 0.08, mat(COLORS.eyePupil), eyeX, eyeY, sign * eyeZ - sign * head * 0.02);
-    }
-
-    group.position.set(0, 0, 0);
-
-    return {
-      group,
-      legL,
-      legR,
-      armL,
-      armR,
-      meshes,
-      shirtMats,
-      shirtColor,
-      walkPhase: 0,
-      swingAmp: 0,
-      lastX: 0,
-      lastZ: 0,
-      afterimages: [],
-    };
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, ARENA.playerSize * 0.55, 6, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fill();
+    ctx.restore();
   }
 
-  private updateCharacter(rig: CharacterRig, p: PlayerState): void {
-    const { group } = rig;
-    group.position.set(p.pos.x, 0, p.pos.z);
-    // facing(atan2(dz,dx)) を three.js の Y 軸回転へ。+x 正面が facing 方向を向くよう -facing。
-    group.rotation.y = -p.facing;
+  /**
+   * 回避の i-frame 中、進行方向の逆側(facing の反対側)に半透明の
+   * アフターイメージ(残像)を数枚描いて、ダッシュの軌跡感を出す。
+   */
+  private drawDodgeAfterimage(p: PlayerState): void {
+    if (!p.dodge || p.dodge.elapsed >= DODGE.iframes) return;
 
-    // 歩行アニメーション: 移動量から速度を見て腕脚をスイング
-    const moved = Math.hypot(p.pos.x - rig.lastX, p.pos.z - rig.lastZ);
-    rig.lastX = p.pos.x;
-    rig.lastZ = p.pos.z;
-    const moving = moved > 0.05 && p.stunTicks === 0;
-    rig.swingAmp += ((moving ? 0.7 : 0) - rig.swingAmp) * 0.2;
-    if (moving) rig.walkPhase += Math.min(0.6, moved * 0.35);
-    const swing = Math.sin(rig.walkPhase) * rig.swingAmp;
-    rig.legL.rotation.z = swing;
-    rig.legR.rotation.z = -swing;
-    rig.armL.rotation.z = -swing * 0.8;
-    rig.armR.rotation.z = swing * 0.8;
+    const { ctx } = this;
+    const baseColor = p.id === 0 ? COLORS.p0 : COLORS.p1;
+    const trailDir = p.facing; // i-frame 中は facing の逆方向へ移動するため、残像は facing 側に伸ばす
 
-    // 軽い待機の上下動
-    const bob = moving ? 0 : Math.sin(this.time / 420) * 0.6;
-    group.position.y = bob;
-
-    // 攻撃モーション(右腕を振りかぶって振り下ろす)
-    if (p.attack) {
-      const spec = ATTACKS[p.attack.kind];
-      const e = p.attack.elapsed;
-      let theta: number;
-      if (e <= spec.windup) {
-        // 振りかぶり(後方/上へ)
-        theta = -1.1 * (e / spec.windup);
-      } else {
-        // 振り下ろし(前方へ)
-        const t = Math.min(1, (e - spec.windup) / (spec.active + spec.recovery));
-        const eased = 1 - (1 - t) * (1 - t);
-        theta = -1.1 + 2.7 * eased;
-      }
-      rig.armR.rotation.z = theta;
-      rig.armL.rotation.z = -theta * 0.3;
-    }
-
-    // スタン: 点滅。攻撃中(active 以降): シャツを発光。回避中: 半透明。
-    const isStunned = p.stunTicks > 0;
-    const isActive = p.attack !== null && p.attack.elapsed >= ATTACKS[p.attack.kind].windup;
-    const dodging = p.dodge !== null;
-    const opacity = dodging ? 0.4 : 1;
-    const blink = isStunned && Math.sin(this.time / 55) > 0;
-
-    for (const m of rig.meshes) {
-      const mm = m.material as THREE.MeshStandardMaterial;
-      mm.transparent = opacity < 1;
-      mm.opacity = opacity;
-    }
-    for (const sm of rig.shirtMats) {
-      if (blink) {
-        sm.emissive.setHex(0x555555);
-        sm.emissiveIntensity = 1;
-      } else if (isActive) {
-        sm.emissive.setHex(rig.shirtColor);
-        sm.emissiveIntensity = 0.6;
-      } else {
-        sm.emissive.setHex(0x000000);
-        sm.emissiveIntensity = 0;
-      }
-    }
-
-    this.updateAfterimages(rig, p, dodging && p.dodge !== null && p.dodge.elapsed < DODGE.iframes);
-  }
-
-  /** 回避 i-frame 中、進行してきた軌跡側に半透明の残像ブロックを表示する */
-  private updateAfterimages(rig: CharacterRig, p: PlayerState, active: boolean): void {
     const ghostCount = 3;
-    if (rig.afterimages.length === 0) {
-      const geo = new THREE.BoxGeometry(8 * U, 28 * U, 6 * U);
-      for (let i = 0; i < ghostCount; i++) {
-        const mat = new THREE.MeshBasicMaterial({ color: rig.shirtColor, transparent: true, opacity: 0 });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.visible = false;
-        this.scene.add(mesh);
-        rig.afterimages.push(mesh);
-      }
-    }
-    if (!active || !p.dodge) {
-      for (const g of rig.afterimages) g.visible = false;
-      return;
-    }
-    for (let i = 0; i < rig.afterimages.length; i++) {
-      const g = rig.afterimages[i];
-      const offset = (i + 1) * ARENA.playerRadius * 0.6;
-      g.position.set(p.pos.x - p.dodge.dirX * offset, 14 * U, p.pos.z - p.dodge.dirZ * offset);
-      (g.material as THREE.MeshBasicMaterial).opacity = 0.2 * (1 - i / (rig.afterimages.length + 1));
-      g.visible = true;
+    for (let i = 1; i <= ghostCount; i++) {
+      const offset = trailDir * i * (ARENA.playerSize * 0.28);
+      const alpha = 0.16 * (1 - i / (ghostCount + 1));
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      this.drawRoundedRect(
+        p.x + offset,
+        ARENA.floorY,
+        ARENA.playerSize,
+        ARENA.playerSize,
+        8,
+        baseColor
+      );
+      ctx.restore();
     }
   }
 
-  // --- 攻撃テレグラフ -------------------------------------------------------
+  private drawPlayer(p: PlayerState): void {
+    const { ctx } = this;
+    const isStunned = p.stunTicks > 0;
+    const isAttacking = p.attack !== null && p.attack.elapsed >= ATTACKS[p.attack.kind].windup;
+    const isIframe = p.dodge !== null && p.dodge.elapsed < DODGE.iframes;
 
-  private buildTelegraph(): THREE.Mesh {
-    const geo = new THREE.CircleGeometry(1, 24, 0, 0.01);
-    const mat = new THREE.MeshBasicMaterial({
-      color: COLORS.telegraphLight,
-      transparent: true,
-      opacity: 0,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.position.y = 6.5;
-    mesh.scale.z = -1;
-    mesh.visible = false;
-    return mesh;
+    ctx.save();
+    ctx.globalAlpha = isIframe ? 0.45 : 1;
+
+    const x = p.x;
+    const y = ARENA.floorY;
+    const size = ARENA.playerSize;
+    const dark = p.id === 0 ? COLORS.p0Dark : COLORS.p1Dark;
+    const main = isStunned ? COLORS.stunned : p.id === 0 ? COLORS.p0 : COLORS.p1;
+    const light = p.id === 0 ? COLORS.p0Light : COLORS.p1Light;
+
+    // 攻撃中 / 被スタン中はグロー(外側の光彩)を描く
+    if (isAttacking || isStunned) {
+      const glowColor = isStunned
+        ? 'rgba(255,255,255,0.55)'
+        : p.id === 0
+          ? 'rgba(77,166,255,0.5)'
+          : 'rgba(255,93,93,0.5)';
+      ctx.save();
+      ctx.shadowColor = glowColor;
+      ctx.shadowBlur = isStunned ? 18 : 14;
+      this.drawRoundedRect(x, y, size, size, 8, main);
+      ctx.restore();
+    }
+
+    // ボディ: 縦方向グラデーションの角丸矩形
+    const grad = ctx.createLinearGradient(x, y, x, y + size);
+    grad.addColorStop(0, light);
+    grad.addColorStop(0.45, main);
+    grad.addColorStop(1, dark);
+    this.drawRoundedRect(x, y, size, size, 8, grad);
+
+    // 輪郭線
+    ctx.strokeStyle = isStunned ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 2;
+    this.roundedRectPath(x, y, size, size, 8);
+    ctx.stroke();
+
+    // 向いている方向を示す「目」マーク
+    const eyeSize = size * 0.12;
+    const eyeY = y + size * 0.3;
+    const eyeX = p.facing > 0 ? x + size * 0.72 : x + size * 0.28 - eyeSize;
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fillRect(eyeX, eyeY, eyeSize, eyeSize);
+
+    ctx.restore();
   }
 
-  private updateTelegraph(mesh: THREE.Mesh, p: PlayerState): void {
-    if (!p.attack || p.attack.elapsed >= ATTACKS[p.attack.kind].windup) {
-      mesh.visible = false;
-      return;
-    }
-    const kind = p.attack.kind;
-    const spec = ATTACKS[kind];
+  /** 角丸矩形のパスを構築する(描画はしない) */
+  private roundedRectPath(x: number, y: number, w: number, h: number, r: number): void {
+    const { ctx } = this;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  /** 角丸矩形を塗りで描画する */
+  private drawRoundedRect(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    r: number,
+    fill: string | CanvasGradient
+  ): void {
+    const { ctx } = this;
+    this.roundedRectPath(x, y, w, h, r);
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+
+  /**
+   * 攻撃の windup 中、発生(active)に近づくほど強く光るテレグラフを
+   * 攻撃側の正面に表示する。強攻撃はより大きく・赤く危険に見せる。
+   */
+  private drawTelegraph(p: PlayerState): void {
+    if (!p.attack) return;
+    const spec = ATTACKS[p.attack.kind];
+    if (p.attack.elapsed >= spec.windup) return; // active/recovery 中は通常の hitbox 表示に任せる
+
+    const { ctx } = this;
+    // 0 (windup開始) -> 1 (active直前) で強さが増す
     const progress = (p.attack.elapsed + 1) / spec.windup;
+    const isHeavy = p.attack.kind === 'heavy';
+    const color = isHeavy ? COLORS.telegraphHeavy : COLORS.telegraphLight;
+    const maxWidth = isHeavy ? spec.range * 1.1 : spec.range * 0.85;
+    const width = Math.max(6, maxWidth * progress);
+    const alpha = 0.15 + 0.55 * progress;
 
-    mesh.geometry.dispose();
-    mesh.geometry = new THREE.CircleGeometry(spec.range, 24, p.attack.aimAngle - spec.arcHalfAngle, spec.arcHalfAngle * 2);
-    mesh.position.set(p.pos.x, 6.5, p.pos.z);
+    const cx = p.x + ARENA.playerSize / 2;
+    const dir = p.facing;
+    const x0 = dir > 0 ? cx : cx - width;
 
-    const mat = mesh.material as THREE.MeshBasicMaterial;
-    mat.color.setHex(kind === 'heavy' ? COLORS.telegraphHeavy : COLORS.telegraphLight);
-    mat.opacity = 0.15 + 0.5 * progress;
-    mesh.visible = true;
+    const grad = ctx.createLinearGradient(x0, 0, dir > 0 ? x0 + width : x0, 0);
+    if (dir > 0) {
+      grad.addColorStop(0, `rgba(${color}, ${(alpha * 0.4).toFixed(2)})`);
+      grad.addColorStop(1, `rgba(${color}, ${alpha.toFixed(2)})`);
+    } else {
+      grad.addColorStop(0, `rgba(${color}, ${alpha.toFixed(2)})`);
+      grad.addColorStop(1, `rgba(${color}, ${(alpha * 0.4).toFixed(2)})`);
+    }
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(x0, ARENA.floorY - 6, width, ARENA.playerSize + 12);
+
+    // 発生間際は外枠を強調してさらに目立たせる
+    if (progress > 0.7) {
+      ctx.strokeStyle = `rgba(${color}, ${Math.min(1, alpha + 0.2).toFixed(2)})`;
+      ctx.lineWidth = isHeavy ? 3 : 2;
+      ctx.strokeRect(x0, ARENA.floorY - 6, width, ARENA.playerSize + 12);
+    }
   }
 
-  // --- カメラ ---------------------------------------------------------------
+  private drawAttackRange(p: PlayerState): void {
+    if (!p.attack) return;
+    const spec = ATTACKS[p.attack.kind];
+    const active = p.attack.elapsed >= spec.windup && p.attack.elapsed < spec.windup + spec.active;
+    if (!active) return;
 
-  private updateCamera(state: GameState, effects: RenderEffects): void {
-    const [p0, p1] = state.players;
-    const midX = (p0.pos.x + p1.pos.x) / 2;
-    const midZ = (p0.pos.z + p1.pos.z) / 2;
-    const dist = Math.hypot(p1.pos.x - p0.pos.x, p1.pos.z - p0.pos.z);
+    const { ctx } = this;
+    const cx = p.x + ARENA.playerSize / 2;
+    ctx.fillStyle = COLORS.hitbox;
+    ctx.fillRect(cx - spec.range, ARENA.floorY - 10, spec.range * 2, ARENA.playerSize + 20);
+  }
 
-    const targetLook = new THREE.Vector3(midX, 28, midZ);
-    this.lookTarget.lerp(targetLook, 0.08);
+  private drawHud(state: GameState): void {
+    const { ctx, canvas } = this;
+    const margin = 16;
+    const barWidth = canvas.width / 2 - margin * 2;
 
-    const desiredDistance = THREE.MathUtils.clamp(440 + dist * 0.6, 440, 780);
-    this.camDistance += (desiredDistance - this.camDistance) * 0.06;
+    state.players.forEach((p, i) => {
+      const x = i === 0 ? margin : canvas.width - margin - barWidth;
+      const color = i === 0 ? COLORS.p0 : COLORS.p1;
+      const barHeight = 16;
+      const radius = 4;
 
-    // +Z 側のやや高い位置から見下ろす(Y 軸回転なし)。
-    const elevation = 0.6;
-    const horizontal = this.camDistance * Math.cos(elevation);
-    const vertical = this.camDistance * Math.sin(elevation);
+      // --- HP バー ---
+      this.drawRoundedRect(x, margin, barWidth, barHeight, radius, COLORS.hpBack);
 
-    const shakeX = effects.shakeX ?? 0;
-    const shakeY = effects.shakeY ?? 0;
+      const realHpWidth = (Math.max(0, p.hp) / PLAYER.maxHp) * barWidth;
+      const displayedHpWidth = (this.displayedHp[i] / PLAYER.maxHp) * barWidth;
 
-    this.camera.position.set(
-      this.lookTarget.x + shakeX,
-      this.lookTarget.y + vertical + shakeY,
-      this.lookTarget.z + horizontal
-    );
-    this.camera.lookAt(this.lookTarget.x + shakeX, this.lookTarget.y + shakeY, this.lookTarget.z);
+      // チップダメージ(直前に失った分): 実値より薄い色で残し、フェードアウトする
+      if (this.chipRemaining[i] > 0 && displayedHpWidth > realHpWidth) {
+        const chipAlpha = this.chipRemaining[i] / CHIP_DECAY_MS;
+        ctx.save();
+        ctx.globalAlpha = 0.6 * chipAlpha;
+        const chipX = i === 0 ? x : x + barWidth - displayedHpWidth;
+        this.drawRoundedRect(chipX, margin, displayedHpWidth, barHeight, radius, COLORS.hpChip);
+        ctx.restore();
+      }
+
+      // 現在の HP(滑らかに追従する displayed 値を使用)
+      const hpWidth = Math.min(displayedHpWidth, barWidth);
+      if (hpWidth > 0) {
+        const grad = ctx.createLinearGradient(x, margin, x, margin + barHeight);
+        grad.addColorStop(0, this.lighten(color));
+        grad.addColorStop(1, color);
+        this.drawRoundedRect(
+          i === 0 ? x : x + barWidth - hpWidth,
+          margin,
+          hpWidth,
+          barHeight,
+          radius,
+          grad
+        );
+      }
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      ctx.lineWidth = 1;
+      this.roundedRectPath(x, margin, barWidth, barHeight, radius);
+      ctx.stroke();
+
+      // --- スタミナバー ---
+      const sy = margin + barHeight + 6;
+      this.drawRoundedRect(x, sy, barWidth, 7, 3, COLORS.staminaBack);
+      const stWidth = (p.stamina / PLAYER.maxStamina) * barWidth;
+      if (stWidth > 0) {
+        this.drawRoundedRect(
+          i === 0 ? x : x + barWidth - stWidth,
+          sy,
+          stWidth,
+          7,
+          3,
+          COLORS.staminaFill
+        );
+      }
+
+      // --- WINS ピップ ---
+      const pipY = sy + 18;
+      const pipRadius = 5;
+      const pipGap = 14;
+      ctx.font = '11px system-ui';
+      ctx.fillStyle = '#8a93a0';
+      ctx.textAlign = i === 0 ? 'left' : 'right';
+      ctx.textBaseline = 'middle';
+      const label = 'WINS';
+      ctx.fillText(label, i === 0 ? x : x + barWidth, pipY);
+      const labelWidth = ctx.measureText(label).width;
+
+      for (let pip = 0; pip < MATCH.roundsToWin; pip++) {
+        const cx =
+          i === 0
+            ? x + labelWidth + 12 + pip * pipGap + pipRadius
+            : x + barWidth - labelWidth - 12 - pip * pipGap - pipRadius;
+        ctx.beginPath();
+        ctx.arc(cx, pipY, pipRadius, 0, Math.PI * 2);
+        ctx.fillStyle = pip < p.roundsWon ? COLORS.pipFill : COLORS.pipEmpty;
+        ctx.fill();
+        if (pip < p.roundsWon) {
+          ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
+      ctx.textBaseline = 'alphabetic';
+    });
+  }
+
+  /** 16進カラーをやや明るくする(HP バーのグラデーション用) */
+  private lighten(hex: string): string {
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+    if (!m) return hex;
+    const [r, g, b] = [m[1], m[2], m[3]].map((c) => Math.min(255, parseInt(c, 16) + 60));
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  private drawMessage(state: GameState): void {
+    if (state.phase === 'fighting') return;
+
+    const { ctx, canvas } = this;
+    ctx.textAlign = 'center';
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+
+    if (state.phase === 'starting') {
+      // 残り 1/3 を切ったら「FIGHT!」、それまでは「READY」
+      const isFight = state.phaseTimer <= MATCH.startCountdownTicks / 3;
+
+      if (isFight) {
+        // FIGHT!: 出現直後にスケールが少し縮みながら馴染む簡易ポップ
+        const elapsedInPhase = MATCH.startCountdownTicks / 3 - state.phaseTimer;
+        const t = Math.min(1, elapsedInPhase / 10);
+        const scale = 1.3 - 0.3 * t;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.scale(scale, scale);
+        ctx.fillStyle = '#ffe066';
+        ctx.shadowColor = 'rgba(255,224,102,0.6)';
+        ctx.shadowBlur = 18;
+        ctx.font = 'bold 52px system-ui';
+        ctx.fillText('FIGHT!', 0, 0);
+        ctx.restore();
+      } else {
+        // READY...: 緩やかな点滅
+        const pulse = 0.7 + 0.3 * Math.sin(this.time / 150);
+        ctx.fillStyle = `rgba(255,255,255,${pulse.toFixed(2)})`;
+        ctx.font = 'bold 44px system-ui';
+        ctx.fillText('READY...', cx, cy);
+      }
+      return;
+    }
+
+    // roundOver / matchOver: フェードイン + わずかな拡大の演出
+    const elapsed = MATCH.roundEndFreezeTicks - state.phaseTimer;
+    const t = Math.min(1, elapsed / 12);
+    const alpha = t;
+    const scale = 0.85 + 0.15 * t;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+
+    const isMatchOver = state.phase === 'matchOver';
+    ctx.fillStyle = isMatchOver ? '#ffe066' : '#ffffff';
+    ctx.font = `bold ${isMatchOver ? 32 : 28}px system-ui`;
+    if (isMatchOver) {
+      ctx.shadowColor = 'rgba(255,224,102,0.5)';
+      ctx.shadowBlur = 16;
+    }
+
+    const text = isMatchOver
+      ? `PLAYER ${(state.winner ?? 0) + 1} WINS THE MATCH`
+      : state.winner === null
+        ? 'DRAW ROUND'
+        : `PLAYER ${state.winner + 1} WINS THE ROUND`;
+
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+
+    if (isMatchOver) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.font = '16px system-ui';
+      ctx.fillStyle = '#8a93a0';
+      ctx.fillText('PRESS ENTER TO RESTART', cx, cy + 32);
+      ctx.restore();
+    }
+  }
+
+  /** 現在の対戦モード(VS CPU / VS PLAYER)を右上に表示する */
+  private drawModeLabel(label?: string): void {
+    if (!label) return;
+    const { ctx, canvas } = this;
+    ctx.textAlign = 'right';
+    ctx.font = '12px system-ui';
+    ctx.fillStyle = '#8a93a0';
+    ctx.fillText(label, canvas.width - 16, canvas.height - 12);
+  }
+
+  /** ジャスト回避時の「JUST!」テキスト。alpha に応じてポップするスケール演出付き */
+  private drawJustText(alpha?: number): void {
+    if (!alpha || alpha <= 0) return;
+    const { ctx, canvas } = this;
+    const a = Math.min(1, alpha);
+    // alpha が高いほど(出現直後ほど)大きく表示し、収束させる
+    const scale = 1 + (1 - a) * 0.4;
+
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2 - 60);
+    ctx.scale(scale, scale);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(255, 224, 102, ${a.toFixed(2)})`;
+    ctx.shadowColor = `rgba(255, 224, 102, ${(a * 0.7).toFixed(2)})`;
+    ctx.shadowBlur = 20;
+    ctx.font = 'bold 40px system-ui';
+    ctx.fillText('JUST!', 0, 0);
+    ctx.restore();
+  }
+
+  /** ジャスト回避時などの全画面フラッシュ */
+  private drawFlash(alpha?: number): void {
+    if (!alpha || alpha <= 0) return;
+    const { ctx, canvas } = this;
+    ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, alpha).toFixed(2)})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 }
