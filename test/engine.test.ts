@@ -221,11 +221,12 @@ describe('just dodge', () => {
     let state = makeState({ x: 0 }, { x: ATTACKS.light.range });
     state = step(state, inputs({ attack: 'light' })); // step 1
 
-    for (let i = 0; i < 8; i++) {
-      state = step(state, inputs()); // steps 2..9
+    // active 開始の直前(windup tick 前)まで進め、その tick に回避を出す → diff 0 のジャスト
+    for (let i = 0; i < ATTACKS.light.windup - 1; i++) {
+      state = step(state, inputs());
     }
 
-    state = step(state, inputs({}, { dodge: true })); // step 10: just dodge
+    state = step(state, inputs({}, { dodge: true })); // active 開始 tick: just dodge
 
     expect(state.players[1].hp).toBe(PLAYER.maxHp);
     expect(state.players[0].stunTicks).toBe(JUST.stunTicks);
@@ -279,10 +280,10 @@ describe('round and match progression', () => {
 
   function landHit(state: GameState): GameState {
     state = step(state, inputs({ attack: 'light' })); // step 1
-    for (let i = 0; i < 8; i++) {
-      state = step(state, inputs()); // steps 2..9
+    for (let i = 0; i < ATTACKS.light.windup - 1; i++) {
+      state = step(state, inputs()); // active 直前まで進める
     }
-    return step(state, inputs()); // step 10: active hit
+    return step(state, inputs()); // active 開始 tick: ヒット
   }
 
   function runRoundOver(state: GameState): GameState {

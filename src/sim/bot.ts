@@ -73,13 +73,13 @@ export function reactiveBot(reactionDelay: number): Bot {
  * - easy: 反応が遅くサボりがち。`allowJustPunish: false` により、ジャスト成立窓
  *   (`ticksUntilActive <= JUST.window`)に入った反応は出さず「早読み回避」しか行わない。
  *   そのため easy CPU は回避してもプレイヤーを硬直させず(ジャスト反撃をもらわない)、
- *   初心者でも安心して攻め込める。reactionDelay(10)で早読みできるのは強攻撃のみ、
- *   弱攻撃(windup 9)はそもそも回避しないので攻撃が通りやすい。
+ *   初心者でも安心して攻め込める。reactionDelay(12)は window(11)超に取り、早読みでのみ
+ *   回避が成立する(=切り返さない)ようにしている。
  * - normal / hard: `allowJustPunish: true`。反応したときはジャスト回避でこちらを
  *   硬直させてくる(reactionDelay が小さいほど反応が速く手強い)。
  */
 export const CPU_DIFFICULTIES = {
-  easy: { reactionDelay: 10, skipReactionChance: 0.6, allowJustPunish: false },
+  easy: { reactionDelay: 12, skipReactionChance: 0.6, allowJustPunish: false },
   normal: { reactionDelay: 6, skipReactionChance: 0.35, allowJustPunish: true },
   hard: { reactionDelay: 4, skipReactionChance: 0.12, allowJustPunish: true },
 } as const satisfies Record<

@@ -52,9 +52,15 @@ export interface AttackSpec {
   verticalRange: number;
 }
 
+/**
+ * 攻撃フレーム。windup(発生)は「反応して回避するための猶予」そのものなので、
+ * 易化のため弱 9→16(150→267ms)・強 27→32(450→533ms)へ延ばし、
+ * 攻撃が見てから十分反応できる速さにしている(モーション/テレグラフ/アシストリングも
+ * その分長く表示される)。active/recovery/ダメージ/間合いは据え置き。
+ */
 export const ATTACKS: Record<'light' | 'heavy', AttackSpec> = {
-  light: { windup: 9, active: 2, recovery: 12, damage: 10, range: 70, verticalRange: 52 },
-  heavy: { windup: 27, active: 3, recovery: 30, damage: 30, range: 90, verticalRange: 60 },
+  light: { windup: 16, active: 2, recovery: 12, damage: 10, range: 70, verticalRange: 52 },
+  heavy: { windup: 32, active: 3, recovery: 30, damage: 30, range: 90, verticalRange: 60 },
 } as const;
 
 export const DODGE = {
@@ -80,14 +86,15 @@ export const JUST = {
    * ジャスト回避成立窓: 攻撃の active 開始から見て、防御側が回避を開始した
    * tick が「active 開始の window tick 前以内」ならジャスト成立。
    *
-   * 9 tick ≈ 150ms。反応が忙しかったため 7→9 に緩和(易化)した
-   * (精密回避の猶予が約 120ms → 150ms に広がる)。
+   * 11 tick ≈ 183ms。反応が忙しかったため 7→9→11 と段階的に緩和(易化)した
+   * (ジャスト報酬を得られる猶予が約 120ms → 183ms に広がる)。
    * 注: この値を loose ボットの reactionDelay(15)以上に上げると、
    *     ヘッドレスシミュレーションの基準結果が変わるため 15 未満に保つこと(DESIGN.md 参照)。
    *     easy CPU が「反応してもジャスト回避で切り返さない」やさしさは、window ではなく
-   *     `cpuBot` の allowJustPunish=false(ジャスト窓内の反応を抑制)で担保している。
+   *     `cpuBot` の allowJustPunish=false(ジャスト窓内の反応を抑制)で担保している
+   *     (easy の reactionDelay は window 超に保つ必要がある点に注意)。
    */
-  window: 9,
+  window: 11,
   /** ジャスト成立時、攻撃側に与える硬直 tick */
   stunTicks: 24,
   /** ジャスト成立時、防御側に還元するスタミナ(消費全額) */
