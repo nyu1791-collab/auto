@@ -33,6 +33,38 @@ const TICK_MS = 1000 / TPS;
 let accumulator = 0;
 let lastTime = performance.now();
 
+// --- 設定の永続化 -------------------------------------------------------
+// 難易度・アシスト・ミュートの選択を localStorage に保存し、次回起動時に復元する。
+// localStorage はブラウザ専用 API なのでエンジン外(main.ts)でのみ扱う。
+// プライベートモード等で例外が出ても致命的でないため握り潰す。
+const SETTINGS_KEY = 'setsuna.settings.v1';
+
+interface SavedSettings {
+  difficulty?: CpuDifficulty;
+  assist?: boolean;
+  muted?: boolean;
+}
+
+function loadSettings(): SavedSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    return raw ? (JSON.parse(raw) as SavedSettings) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSettings(): void {
+  try {
+    const data: SavedSettings = { difficulty: cpuDifficulty, assist: showJustCue, muted: audio.muted };
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(data));
+  } catch {
+    /* 保存に失敗しても無視(プライベートモード等) */
+  }
+}
+
+const savedSettings = loadSettings();
+
 // --- 対戦モード -------------------------------------------------------
 // デフォルトは CPU 対戦(1人プレイ即開始)。'c' キーで 2P ローカル対戦に切替。
 let vsCpu = true;
@@ -40,14 +72,21 @@ let vsCpu = true;
 // --- ジャスト回避アシスト ----------------------------------------------
 // 攻撃側に収束リングを描き、ジャスト回避の猶予に入ると金色に光らせる補助表示。
 // 'h' キーで ON/OFF を切替(初心者はタイミングを掴みやすく、上級者は消せる)。
-let showJustCue = true;
+let showJustCue = savedSettings.assist ?? true;
+
+// 保存済みのミュート状態を復元する
+if (savedSettings.muted) audio.setMuted(true);
 
 // --- CPU 難易度 ---------------------------------------------------------
 // 'v' キーで easy -> normal -> hard を循環。VS PLAYER 中でも切替可能
 // (次に VS CPU に戻したとき反映される)。
 const CPU_DIFFICULTY_ORDER: CpuDifficulty[] = ['easy', 'normal', 'hard'];
 // 既定は easy(やさしめ)。慣れてきたら 'v' で normal/hard に上げられる。
-let cpuDifficulty: CpuDifficulty = 'easy';
+// 保存済みの難易度があれば復元する(不正値は easy にフォールバック)。
+let cpuDifficulty: CpuDifficulty =
+  savedSettings.difficulty && CPU_DIFFICULTY_ORDER.includes(savedSettings.difficulty)
+    ? savedSettings.difficulty
+    : 'easy';
 let cpu = cpuBot(
   CPU_DIFFICULTIES[cpuDifficulty].reactionDelay,
   CPU_DIFFICULTIES[cpuDifficulty].skipReactionChance,
@@ -184,12 +223,15 @@ function handleMenuInputs(): void {
     cpuDifficulty = CPU_DIFFICULTY_ORDER[(idx + 1) % CPU_DIFFICULTY_ORDER.length];
     const { reactionDelay, skipReactionChance, allowJustPunish } = CPU_DIFFICULTIES[cpuDifficulty];
     cpu = cpuBot(reactionDelay, skipReactionChance, allowJustPunish);
+    saveSettings();
   }
   if (input.wasJustPressed('m')) {
     audio.setMuted(!audio.muted);
+    saveSettings();
   }
   if (input.wasJustPressed('h')) {
     showJustCue = !showJustCue;
+    saveSettings();
   }
   if (state.phase === 'matchOver') {
     if (input.wasJustPressed('enter') || input.wasJustPressed(' ')) {

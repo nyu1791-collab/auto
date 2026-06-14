@@ -160,6 +160,10 @@
 - **M**: ミュート切替(`AudioEngine` の ON/OFF。状態はモードラベルに 🔊/🔇 で表示)。
 - **Enter / Space**: `matchOver` 時に新しい試合を開始(`createInitialState()` を再生成)。
 
+難易度・アシスト・ミュートの選択は `localStorage`(`setsuna.settings.v1`)に保存され、
+次回起動時に復元される(`main.ts` の `loadSettings`/`saveSettings`、エンジン外レイヤー。
+保存失敗は握り潰す)。
+
 ### CPU 対戦(`src/sim/bot.ts` の `cpuBot`)
 
 `reactiveBot` をベースに、勝てるが完璧ではない「人間が崩せる」相手として:
