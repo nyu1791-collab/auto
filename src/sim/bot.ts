@@ -68,6 +68,21 @@ export function reactiveBot(reactionDelay: number): Bot {
  *
  * Math.random を使うため非決定的。simulate.ts のヘッドレス対戦では使用しないこと。
  */
+/**
+ * cpuBot のプリセット難易度。
+ * - easy: 反応が遅く、サボりがちで間合いの調整も粗い。
+ * - normal: デフォルト(`cpuBot()` の既定値と同じ)。
+ * - hard: 反応が早く、サボりが少ない(が `JUST.window`(7)以内なので
+ *   依然としてジャスト回避自体は反応次第で防げる)。
+ */
+export const CPU_DIFFICULTIES = {
+  easy: { reactionDelay: 9, skipReactionChance: 0.6 },
+  normal: { reactionDelay: 6, skipReactionChance: 0.35 },
+  hard: { reactionDelay: 4, skipReactionChance: 0.12 },
+} as const satisfies Record<string, { reactionDelay: number; skipReactionChance: number }>;
+
+export type CpuDifficulty = keyof typeof CPU_DIFFICULTIES;
+
 export function cpuBot(reactionDelay = 6, skipReactionChance = 0.35): Bot {
   return (state, self) => {
     const me = state.players[self];

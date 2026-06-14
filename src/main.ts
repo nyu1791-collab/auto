@@ -4,12 +4,11 @@ import { createInitialState } from './engine/state';
 import type { GameState, Inputs } from './engine/types';
 import { InputManager } from './input/input';
 import { Renderer, type RenderEffects } from './render/renderer';
-import { cpuBot } from './sim/bot';
+import { CPU_DIFFICULTIES, cpuBot, type CpuDifficulty } from './sim/bot';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const renderer = new Renderer(canvas);
 const input = new InputManager(window);
-const cpu = cpuBot();
 
 let state: GameState = createInitialState();
 
@@ -20,6 +19,16 @@ let lastTime = performance.now();
 // --- 対戦モード -------------------------------------------------------
 // デフォルトは CPU 対戦(1人プレイ即開始)。'c' キーで 2P ローカル対戦に切替。
 let vsCpu = true;
+
+// --- CPU 難易度 ---------------------------------------------------------
+// 'v' キーで easy -> normal -> hard を循環。VS PLAYER 中でも切替可能
+// (次に VS CPU に戻したとき反映される)。
+const CPU_DIFFICULTY_ORDER: CpuDifficulty[] = ['easy', 'normal', 'hard'];
+let cpuDifficulty: CpuDifficulty = 'normal';
+let cpu = cpuBot(
+  CPU_DIFFICULTIES[cpuDifficulty].reactionDelay,
+  CPU_DIFFICULTIES[cpuDifficulty].skipReactionChance
+);
 
 // --- ヒットストップ -----------------------------------------------------
 // ジャスト回避が決まった瞬間、固定ステップの進行を一時停止して「決まった」感を出す。
@@ -74,6 +83,12 @@ function handleMenuInputs(): void {
   if (input.wasJustPressed('c')) {
     vsCpu = !vsCpu;
   }
+  if (input.wasJustPressed('v')) {
+    const idx = CPU_DIFFICULTY_ORDER.indexOf(cpuDifficulty);
+    cpuDifficulty = CPU_DIFFICULTY_ORDER[(idx + 1) % CPU_DIFFICULTY_ORDER.length];
+    const { reactionDelay, skipReactionChance } = CPU_DIFFICULTIES[cpuDifficulty];
+    cpu = cpuBot(reactionDelay, skipReactionChance);
+  }
   if (state.phase === 'matchOver') {
     if (input.wasJustPressed('enter') || input.wasJustPressed(' ')) {
       state = createInitialState();
@@ -116,7 +131,9 @@ function loop(now: number): void {
   }
 
   const effects: RenderEffects = {
-    modeLabel: vsCpu ? 'VS CPU (C で切替)' : 'VS PLAYER (C で切替)',
+    modeLabel: vsCpu
+      ? `VS CPU [${cpuDifficulty.toUpperCase()}] (C:対戦切替 V:難易度)`
+      : `VS PLAYER (C:対戦切替 V:難易度)`,
   };
 
   if (shakeRemaining > 0) {

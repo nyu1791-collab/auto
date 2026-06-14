@@ -113,6 +113,8 @@
 
 - **C**: 「VS CPU」⇄「VS PLAYER(ローカル 2P)」切替。デフォルトは VS CPU で、
   起動直後から 1 人で CPU と対戦できる。
+- **V**: CPU の難易度切替(`easy` → `normal` → `hard` を循環、デフォルトは `normal`)。
+  VS PLAYER 中でも切替でき、次に VS CPU に戻したときに反映される。
 - **Enter / Space**: `matchOver` 時に新しい試合を開始(`createInitialState()` を再生成)。
 
 ### CPU 対戦(`src/sim/bot.ts` の `cpuBot`)
@@ -124,6 +126,18 @@
 
 `cpuBot` はライブプレイ専用で `Math.random` に依存するため非決定的。
 `simulate.ts` が使う `aggressiveBot` / `reactiveBot` は引き続き決定論的(乱数を使わない)。
+
+#### CPU 難易度プリセット(`CPU_DIFFICULTIES`)
+
+`cpuBot(reactionDelay, skipReactionChance)` のパラメータをプリセット化したもの。
+`reactionDelay` が `JUST.window`(7)以下であれば理論上ジャスト回避が成立し得るが、
+`skipReactionChance` が高いほど反応そのものをサボる確率が上がる。
+
+| 難易度 | reactionDelay | skipReactionChance | 傾向 |
+|---|---|---|---|
+| easy | 9 | 0.6 | 反応が遅く、サボりがち |
+| normal | 6 | 0.35 | `cpuBot()` の既定値 |
+| hard | 4 | 0.12 | 反応が早く、サボりが少ない |
 
 ### 画面演出(`main.ts` のエフェクトレイヤー)
 

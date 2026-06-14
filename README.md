@@ -49,6 +49,7 @@ npm run build
 | P2(右・赤) | ← / → | ↑ | K | L |
 
 - **C**: 「VS CPU」⇄「VS PLAYER(ローカル2P)」の対戦モード切替(デフォルトは VS CPU)
+- **V**: CPU の難易度切替(EASY → NORMAL → HARD を循環、デフォルトは NORMAL)
 - **Enter** または **Space**: 試合終了(MATCH OVER)後に押すと新しい試合を開始(リスタート)
 
 ### ラウンド進行
