@@ -40,6 +40,8 @@ const COLORS = {
 const HP_LERP_RATE = 0.12;
 /** チップダメージ表示が消えるまでの時間(ms) */
 const CHIP_DECAY_MS = 600;
+/** 被弾フリンチ(のけぞり)演出が持続する時間(ms) */
+const FLINCH_MS = 170;
 /** 接地直後の「着地つぶれ」スカッシュ演出が持続する時間(ms) */
 const LANDING_SQUASH_MS = 140;
 /** ジャンプ/落下中の伸縮(スクワッシュ&ストレッチ)の最大変形率 */
@@ -92,6 +94,10 @@ export class Renderer {
   private stridePhase: [number, number] = [0, 0];
   /** 歩行アニメの振幅(0=静止 → 1=歩行中)。移動状態へ滑らかに追従する。プレイヤーごと */
   private walkAmp: [number, number] = [0, 0];
+  /** 直前フレームの実 HP(被弾フリンチ検出用)。プレイヤーごと */
+  private prevHp: [number, number] = [PLAYER.maxHp, PLAYER.maxHp];
+  /** 被弾フリンチ(のけぞり)演出の残り時間(ms)。プレイヤーごと */
+  private flinch: [number, number] = [0, 0];
 
   constructor(private canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -181,6 +187,15 @@ export class Renderer {
       const rate = Math.min(1, dtMs / 90);
       this.walkAmp[i] += (target - this.walkAmp[i]) * rate;
       this.prevX[i] = p.x;
+
+      // 被弾フリンチ: 実 HP が減ったフレームにのけぞり演出を起動する
+      if (p.hp < this.prevHp[i] - 0.01) {
+        this.flinch[i] = FLINCH_MS;
+      }
+      if (this.flinch[i] > 0) {
+        this.flinch[i] = Math.max(0, this.flinch[i] - dtMs);
+      }
+      this.prevHp[i] = p.hp;
     }
   }
 
@@ -439,6 +454,13 @@ export class Renderer {
       hipX += wob * 2;
       fHand = { x: dir * 11, y: shoulderY + 5 };
       rHand = { x: -dir * 11, y: shoulderY + 3 };
+    }
+
+    // --- 被弾フリンチ(短いのけぞり。被スタン中は専用ポーズを優先) ---
+    if (p.stunTicks === 0 && this.flinch[p.id] > 0) {
+      const f = this.flinch[p.id] / FLINCH_MS;
+      lean -= 0.4 * f; // 後方へのけぞる
+      hipX -= dir * 2 * f; // 重心も後ろへ引く
     }
 
     // crouch を上体へ反映(足は接地のまま上体を沈める)
@@ -847,6 +869,16 @@ export class Renderer {
         ctx.fillStyle = `rgba(255,255,255,${pulse.toFixed(2)})`;
         ctx.font = 'bold 44px system-ui';
         ctx.fillText('READY...', cx, cy);
+      }
+
+      // 初回ラウンド(両者まだ無得点)のみ、操作のヒントを下部に表示する
+      if (state.players[0].roundsWon === 0 && state.players[1].roundsWon === 0) {
+        ctx.fillStyle = 'rgba(255,224,102,0.85)';
+        ctx.font = 'bold 17px system-ui';
+        ctx.fillText('敵を囲むリングが光ったら 回避!', cx, cy + 58);
+        ctx.fillStyle = 'rgba(230,230,230,0.7)';
+        ctx.font = '13px system-ui';
+        ctx.fillText('P1 回避: W / P2 回避: ↑ — ジャストで反撃のチャンス', cx, cy + 80);
       }
       return;
     }

@@ -50,7 +50,8 @@ const CPU_DIFFICULTY_ORDER: CpuDifficulty[] = ['easy', 'normal', 'hard'];
 let cpuDifficulty: CpuDifficulty = 'easy';
 let cpu = cpuBot(
   CPU_DIFFICULTIES[cpuDifficulty].reactionDelay,
-  CPU_DIFFICULTIES[cpuDifficulty].skipReactionChance
+  CPU_DIFFICULTIES[cpuDifficulty].skipReactionChance,
+  CPU_DIFFICULTIES[cpuDifficulty].allowJustPunish
 );
 
 // --- ヒットストップ -----------------------------------------------------
@@ -165,8 +166,8 @@ function handleMenuInputs(): void {
   if (input.wasJustPressed('v')) {
     const idx = CPU_DIFFICULTY_ORDER.indexOf(cpuDifficulty);
     cpuDifficulty = CPU_DIFFICULTY_ORDER[(idx + 1) % CPU_DIFFICULTY_ORDER.length];
-    const { reactionDelay, skipReactionChance } = CPU_DIFFICULTIES[cpuDifficulty];
-    cpu = cpuBot(reactionDelay, skipReactionChance);
+    const { reactionDelay, skipReactionChance, allowJustPunish } = CPU_DIFFICULTIES[cpuDifficulty];
+    cpu = cpuBot(reactionDelay, skipReactionChance, allowJustPunish);
   }
   if (input.wasJustPressed('m')) {
     audio.setMuted(!audio.muted);

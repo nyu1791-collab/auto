@@ -1,4 +1,4 @@
-import { ATTACKS, DODGE } from '../engine/constants';
+import { ATTACKS, DODGE, JUST } from '../engine/constants';
 import type { AttackKind, GameState, PlayerId, PlayerInput } from '../engine/types';
 
 export type Bot = (state: GameState, self: PlayerId) => PlayerInput;
@@ -70,23 +70,30 @@ export function reactiveBot(reactionDelay: number): Bot {
  */
 /**
  * cpuBot のプリセット難易度。
- * - easy: 反応が遅く、サボりがち。reactionDelay(10)を `JUST.window`(9)より大きく
- *   取ることで、easy CPU が回避してもダメージ無効どまりでプレイヤーを硬直させない
- *   (= ジャスト回避の反撃をもらわない)ため、初心者でも攻め込みやすい。
- * - normal: 標準。reactionDelay(6)≦ window なので反応したときはジャスト回避で
- *   こちらを硬直させてくる。
- * - hard: 反応が早く、サボりが少ない(reactionDelay(4)≦ window なので
- *   反応すればほぼジャスト回避で切り返してくる)。
+ * - easy: 反応が遅くサボりがち。`allowJustPunish: false` により、ジャスト成立窓
+ *   (`ticksUntilActive <= JUST.window`)に入った反応は出さず「早読み回避」しか行わない。
+ *   そのため easy CPU は回避してもプレイヤーを硬直させず(ジャスト反撃をもらわない)、
+ *   初心者でも安心して攻め込める。reactionDelay(10)で早読みできるのは強攻撃のみ、
+ *   弱攻撃(windup 9)はそもそも回避しないので攻撃が通りやすい。
+ * - normal / hard: `allowJustPunish: true`。反応したときはジャスト回避でこちらを
+ *   硬直させてくる(reactionDelay が小さいほど反応が速く手強い)。
  */
 export const CPU_DIFFICULTIES = {
-  easy: { reactionDelay: 10, skipReactionChance: 0.6 },
-  normal: { reactionDelay: 6, skipReactionChance: 0.35 },
-  hard: { reactionDelay: 4, skipReactionChance: 0.12 },
-} as const satisfies Record<string, { reactionDelay: number; skipReactionChance: number }>;
+  easy: { reactionDelay: 10, skipReactionChance: 0.6, allowJustPunish: false },
+  normal: { reactionDelay: 6, skipReactionChance: 0.35, allowJustPunish: true },
+  hard: { reactionDelay: 4, skipReactionChance: 0.12, allowJustPunish: true },
+} as const satisfies Record<
+  string,
+  { reactionDelay: number; skipReactionChance: number; allowJustPunish: boolean }
+>;
 
 export type CpuDifficulty = keyof typeof CPU_DIFFICULTIES;
 
-export function cpuBot(reactionDelay = 6, skipReactionChance = 0.35): Bot {
+export function cpuBot(
+  reactionDelay = 6,
+  skipReactionChance = 0.35,
+  allowJustPunish = true
+): Bot {
   return (state, self) => {
     const me = state.players[self];
     const opp = state.players[1 - self];
@@ -97,9 +104,13 @@ export function cpuBot(reactionDelay = 6, skipReactionChance = 0.35): Bot {
       const spec = ATTACKS[opp.attack.kind];
       const ticksUntilActive = spec.windup - opp.attack.elapsed;
       const canDodge = me.dodgeCooldown === 0 && me.stamina >= DODGE.staminaCost;
+      // allowJustPunish=false(easy)では、ジャスト成立窓に入った反応は抑制し、
+      // 早読み(window 超)でしか回避しない → 回避してもプレイヤーを硬直させない。
+      const notPunishing = allowJustPunish || ticksUntilActive > JUST.window;
       if (
         ticksUntilActive >= 0 &&
         ticksUntilActive <= reactionDelay &&
+        notPunishing &&
         canDodge &&
         Math.random() >= skipReactionChance
       ) {

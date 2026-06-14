@@ -167,17 +167,22 @@
 
 #### CPU 難易度プリセット(`CPU_DIFFICULTIES`)
 
-`cpuBot(reactionDelay, skipReactionChance)` のパラメータをプリセット化したもの。
-`reactionDelay` が `JUST.window`(9)以下であれば、CPU が反応したときジャスト回避が成立し
-プレイヤーを硬直させる(=切り返してくる)。`skipReactionChance` が高いほど反応そのものを
-サボる確率が上がる。easy は `reactionDelay`(10)を window より大きく取ることで、
-**反応してもダメージ無効どまりでプレイヤーを硬直させない**ようにし、初心者でも攻め込めるようにしている。
+`cpuBot(reactionDelay, skipReactionChance, allowJustPunish)` のパラメータをプリセット化したもの。
+`reactionDelay` が小さいほど反応が速く、`skipReactionChance` が高いほど反応そのものをサボる。
+`allowJustPunish` が `true` の難易度は、反応したときジャスト回避が成立してプレイヤーを硬直
+させる(=切り返してくる)。easy は `allowJustPunish: false` とし、ジャスト成立窓
+(`ticksUntilActive <= JUST.window`)に入った反応を抑制して「早読み回避」しか行わないため、
+**回避してもプレイヤーを硬直させない**(初心者が安心して攻め込める)。
 
-| 難易度 | reactionDelay | skipReactionChance | 傾向                                         |
-| ------ | ------------- | ------------------ | -------------------------------------------- |
-| easy   | 10            | 0.6                | 反応が遅くサボりがち。反応しても切り返さない |
-| normal | 6             | 0.35               | 反応時はジャスト回避で切り返す               |
-| hard   | 4             | 0.12               | 反応が早く、サボりが少ない                   |
+> 補足: `cpuBot` は各 tick 反応を試みるため、`reactionDelay` を window より大きく取るだけでは
+> サボりで反応が遅れた結果ジャスト窓に入り得る。easy の非懲罰性は `allowJustPunish` で明示的に
+> 担保している(`reactionDelay`/`JUST.window` の大小関係だけには依存しない)。
+
+| 難易度 | reactionDelay | skipReactionChance | allowJustPunish | 傾向                                       |
+| ------ | ------------- | ------------------ | --------------- | ------------------------------------------ |
+| easy   | 10            | 0.6                | false           | 反応が遅くサボりがち。切り返さない(早読みのみ) |
+| normal | 6             | 0.35               | true            | 反応時はジャスト回避で切り返す             |
+| hard   | 4             | 0.12               | true            | 反応が早く、サボりが少ない                 |
 
 ### 画面演出(`main.ts` のエフェクトレイヤー)
 

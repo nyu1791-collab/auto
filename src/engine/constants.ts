@@ -82,11 +82,10 @@ export const JUST = {
    *
    * 9 tick ≈ 150ms。反応が忙しかったため 7→9 に緩和(易化)した
    * (精密回避の猶予が約 120ms → 150ms に広がる)。
-   * 注1: この値を loose ボットの reactionDelay(15)以上に上げると、
-   *      ヘッドレスシミュレーションの基準結果が変わるため 15 未満に保つこと(DESIGN.md 参照)。
-   * 注2: easy CPU の reactionDelay(10)は「window 超 かつ DODGE.iframes 以下」に保つことで
-   *      「反応してもダメージ無効どまり(プレイヤーを硬直させない)」やさしい挙動を維持している。
-   *      window をこの境界(= iframes-1)より上げると easy の非懲罰性が崩れる点に注意。
+   * 注: この値を loose ボットの reactionDelay(15)以上に上げると、
+   *     ヘッドレスシミュレーションの基準結果が変わるため 15 未満に保つこと(DESIGN.md 参照)。
+   *     easy CPU が「反応してもジャスト回避で切り返さない」やさしさは、window ではなく
+   *     `cpuBot` の allowJustPunish=false(ジャスト窓内の反応を抑制)で担保している。
    */
   window: 9,
   /** ジャスト成立時、攻撃側に与える硬直 tick */
