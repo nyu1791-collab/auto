@@ -146,6 +146,14 @@ function detectEvents(prev: GameState, next: GameState): void {
       // バーストは「決めた」側(防御側 = 相手)の位置に出す
       const defenderCenter = playerCenter(opponent);
       particles.burst(defenderCenter.x, defenderCenter.y, '#ffe066', 24);
+      // 決めた側に「反撃!」を出して、ジャスト回避後が攻め込む好機だと教える
+      floatingTexts.spawn(
+        defenderCenter.x,
+        defenderCenter.y - ARENA.playerSize * 0.55,
+        '反撃!',
+        '#ffe066',
+        18
+      );
       audio.just();
     }
 
