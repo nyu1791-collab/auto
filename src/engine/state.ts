@@ -1,10 +1,10 @@
-import { ARENA, MATCH, PLAYER } from './constants';
-import type { GameState, PlayerState } from './types';
+import { MATCH, PLAYER } from './constants';
+import type { GameState, PlayerState, Vec2 } from './types';
 
-function createPlayer(id: 0 | 1, x: number, facing: 1 | -1): PlayerState {
+function createPlayer(id: 0 | 1, pos: Vec2, facing: number): PlayerState {
   return {
     id,
-    x,
+    pos: { ...pos },
     facing,
     hp: PLAYER.maxHp,
     stamina: PLAYER.maxStamina,
@@ -16,14 +16,22 @@ function createPlayer(id: 0 | 1, x: number, facing: 1 | -1): PlayerState {
   };
 }
 
-const P0_START_X = 200;
-const P1_START_X = ARENA.width - 200 - ARENA.playerSize;
+const P0_START: Vec2 = { x: -180, z: 0 };
+const P1_START: Vec2 = { x: 180, z: 0 };
+
+/** 開始位置から互いに向き合う facing(ラジアン)を算出する */
+function initialFacing(self: Vec2, opponent: Vec2): number {
+  return Math.atan2(opponent.z - self.z, opponent.x - self.x);
+}
 
 export function createInitialState(): GameState {
   return {
     tick: 0,
     roundTick: 0,
-    players: [createPlayer(0, P0_START_X, 1), createPlayer(1, P1_START_X, -1)],
+    players: [
+      createPlayer(0, P0_START, initialFacing(P0_START, P1_START)),
+      createPlayer(1, P1_START, initialFacing(P1_START, P0_START)),
+    ],
     phase: 'starting',
     winner: null,
     phaseTimer: MATCH.startCountdownTicks,
@@ -37,8 +45,8 @@ export function resetRound(state: GameState): GameState {
     tick: state.tick,
     roundTick: 0,
     players: [
-      { ...createPlayer(0, P0_START_X, 1), roundsWon: p0.roundsWon },
-      { ...createPlayer(1, P1_START_X, -1), roundsWon: p1.roundsWon },
+      { ...createPlayer(0, P0_START, initialFacing(P0_START, P1_START)), roundsWon: p0.roundsWon },
+      { ...createPlayer(1, P1_START, initialFacing(P1_START, P0_START)), roundsWon: p1.roundsWon },
     ],
     phase: 'starting',
     winner: null,
