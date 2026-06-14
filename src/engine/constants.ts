@@ -70,4 +70,8 @@ export const MATCH = {
   roundsToWin: 2,
   /** ラウンド制限時間(秒) */
   roundSeconds: 60,
+  /** ラウンド開始前の「READY...FIGHT!」カウントダウン tick 数(1.5s) */
+  startCountdownTicks: 90,
+  /** ラウンド終了後、結果を表示したまま固定する tick 数(2.5s) */
+  roundEndFreezeTicks: 150,
 } as const;

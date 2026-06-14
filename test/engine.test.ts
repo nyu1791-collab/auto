@@ -33,6 +33,7 @@ function makeState(
     players: [makePlayer(0, p0), makePlayer(1, p1)],
     phase: 'fighting',
     winner: null,
+    phaseTimer: 0,
     ...extra,
   };
 }
@@ -42,12 +43,13 @@ function inputs(p0: Partial<PlayerInput> = {}, p1: Partial<PlayerInput> = {}): I
 }
 
 describe('createInitialState', () => {
-  it('starts both players at full hp/stamina in the fighting phase', () => {
+  it('starts both players at full hp/stamina in the starting phase', () => {
     const state = createInitialState();
     expect(state.players[0].hp).toBe(PLAYER.maxHp);
     expect(state.players[1].hp).toBe(PLAYER.maxHp);
     expect(state.players[0].stamina).toBe(PLAYER.maxStamina);
-    expect(state.phase).toBe('fighting');
+    expect(state.phase).toBe('starting');
+    expect(state.phaseTimer).toBe(MATCH.startCountdownTicks);
   });
 });
 
@@ -191,6 +193,29 @@ describe('just dodge', () => {
   });
 });
 
+describe('starting phase', () => {
+  it('ignores inputs and counts down to fighting', () => {
+    let state = createInitialState();
+    expect(state.phase).toBe('starting');
+    expect(state.roundTick).toBe(0);
+
+    const startX = state.players[0].x;
+    state = step(state, inputs({ move: 1, attack: 'light', dodge: true }));
+    expect(state.phase).toBe('starting');
+    expect(state.phaseTimer).toBe(MATCH.startCountdownTicks - 1);
+    expect(state.players[0].x).toBe(startX);
+    expect(state.players[0].attack).toBeNull();
+    expect(state.players[0].dodge).toBeNull();
+    expect(state.roundTick).toBe(0);
+
+    for (let i = 0; i < MATCH.startCountdownTicks - 1; i++) {
+      state = step(state, inputs());
+    }
+    expect(state.phase).toBe('fighting');
+    expect(state.phaseTimer).toBe(0);
+  });
+});
+
 describe('round and match progression', () => {
   function lethalHitSetup(p0RoundsWon: number, p1Hp: number): GameState {
     return makeState({ x: 0, roundsWon: p0RoundsWon }, { x: ATTACKS.light.range, hp: p1Hp });
@@ -204,32 +229,63 @@ describe('round and match progression', () => {
     return step(state, inputs()); // step 10: active hit
   }
 
-  it('ends the round and awards roundsWon on a KO', () => {
+  function runRoundOver(state: GameState): GameState {
+    for (let i = 0; i < MATCH.roundEndFreezeTicks; i++) {
+      state = step(state, inputs());
+    }
+    return state;
+  }
+
+  it('ends the round, awards roundsWon, and freezes on roundOver', () => {
     const state = landHit(lethalHitSetup(0, ATTACKS.light.damage));
     expect(state.players[1].hp).toBe(0);
     expect(state.players[0].roundsWon).toBe(1);
     expect(state.phase).toBe('roundOver');
     expect(state.winner).toBe(0);
+    expect(state.phaseTimer).toBe(MATCH.roundEndFreezeTicks);
   });
 
-  it('resets for the next round while preserving roundsWon', () => {
+  it('ignores inputs while frozen on roundOver', () => {
     let state = landHit(lethalHitSetup(0, ATTACKS.light.damage));
-    state = step(state, inputs());
-    expect(state.phase).toBe('fighting');
+    const before = state.players[1].x;
+    state = step(state, inputs({ move: 1 }, { move: -1 }));
+    expect(state.phase).toBe('roundOver');
+    expect(state.phaseTimer).toBe(MATCH.roundEndFreezeTicks - 1);
+    expect(state.players[1].x).toBe(before);
+  });
+
+  it('after the roundOver freeze, starts the next round (preserving roundsWon) then fights', () => {
+    let state = landHit(lethalHitSetup(0, ATTACKS.light.damage));
+    state = runRoundOver(state);
+
+    expect(state.phase).toBe('starting');
+    expect(state.phaseTimer).toBe(MATCH.startCountdownTicks);
     expect(state.players[0].roundsWon).toBe(1);
     expect(state.players[1].hp).toBe(PLAYER.maxHp);
     expect(state.roundTick).toBe(0);
+
+    for (let i = 0; i < MATCH.startCountdownTicks; i++) {
+      state = step(state, inputs());
+    }
+    expect(state.phase).toBe('fighting');
   });
 
-  it('ends the match once a player reaches roundsToWin', () => {
-    const state = landHit(lethalHitSetup(MATCH.roundsToWin - 1, ATTACKS.light.damage));
-    expect(state.phase).toBe('matchOver');
+  it('ends the match once a player reaches roundsToWin, after the roundOver freeze', () => {
+    let state = landHit(lethalHitSetup(MATCH.roundsToWin - 1, ATTACKS.light.damage));
+    expect(state.phase).toBe('roundOver');
     expect(state.winner).toBe(0);
     expect(state.players[0].roundsWon).toBe(MATCH.roundsToWin);
+
+    state = runRoundOver(state);
+    expect(state.phase).toBe('matchOver');
+    expect(state.winner).toBe(0);
   });
 
   it('is a no-op once the match is over', () => {
-    const state = landHit(lethalHitSetup(MATCH.roundsToWin - 1, ATTACKS.light.damage));
+    let state = landHit(lethalHitSetup(MATCH.roundsToWin - 1, ATTACKS.light.damage));
+    state = runRoundOver(state);
+    expect(state.phase).toBe('matchOver');
+
     const next = step(state, inputs({ move: 1 }));
     expect(next).toEqual(state);
   });

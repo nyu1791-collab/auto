@@ -53,7 +53,7 @@ export interface PlayerState {
   roundsWon: number;
 }
 
-export type RoundPhase = 'fighting' | 'roundOver' | 'matchOver';
+export type RoundPhase = 'starting' | 'fighting' | 'roundOver' | 'matchOver';
 
 export interface GameState {
   /** マッチ開始からの累積 tick */
@@ -64,6 +64,8 @@ export interface GameState {
   phase: RoundPhase;
   /** ラウンド/マッチの勝者。fighting 中は null */
   winner: PlayerId | null;
+  /** 'starting' / 'roundOver' のカウントダウン残 tick */
+  phaseTimer: number;
 }
 
 export type Inputs = [PlayerInput, PlayerInput];

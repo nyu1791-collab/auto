@@ -73,11 +73,32 @@
 
 ---
 
-## 5. 勝敗
+## 5. 勝敗・ラウンド進行
 
 - 1 ラウンド = 相手 HP を 0 に。
-- 3 本勝負(先取 2 本)。
-- ラウンド制限時間 60 秒。時間切れ時は HP 多い方の勝ち。
+- 3 本勝負(先取 2 本、`MATCH.roundsToWin = 2`)。
+- ラウンド制限時間 60 秒。時間切れ時は HP 多い方の勝ち。同点はドロー(両者 roundsWon 変化なし)。
+
+### フェーズ遷移(`GameState.phase`)
+
+`'starting' | 'fighting' | 'roundOver' | 'matchOver'` の 4 段階。`phaseTimer` が
+`'starting'` / `'roundOver'` のカウントダウン残 tick を保持する。
+
+1. **starting**: ラウンド開始前の「READY... → FIGHT!」表示。
+   `MATCH.startCountdownTicks`(90 tick ≈ 1.5s)の間、入力は無視され、
+   タイマーが 0 になると `fighting` へ移行する。
+2. **fighting**: 通常の対戦ロジック(本書 1〜4 章)。
+3. **roundOver**: KO・ダブル KO・タイムアップでラウンドが終了すると遷移。
+   勝者の `roundsWon` をこのタイミングで加算し(ドローは加算なし)、
+   `MATCH.roundEndFreezeTicks`(150 tick ≈ 2.5s)の間、結果表示のまま入力を無視してフリーズする。
+   タイマーが 0 になったとき:
+   - どちらかの `roundsWon >= MATCH.roundsToWin` なら `matchOver` へ(その時点で試合の勝者が確定)。
+   - そうでなければ次ラウンド用にリセットし(`roundsWon` は保持)、`starting` へ戻る。
+4. **matchOver**: 試合終了。`step()` は状態を変化させず no-op を返す
+   (リスタートはエンジン外、`main.ts` で `createInitialState()` を呼び直すことで行う)。
+
+ラウンドの決着が試合の決着(2 本目)を兼ねる場合でも、必ず一度 `roundOver` の
+結果フリーズを経てから `matchOver` に遷移する(決勝ラウンドの結果も必ず表示される)。
 
 ---
 
@@ -87,6 +108,31 @@
 |---|---|---|---|---|
 | P1(左・青) | A / D | W | F | G |
 | P2(右・赤) | ← / → | ↑ | K | L |
+
+追加操作:
+
+- **C**: 「VS CPU」⇄「VS PLAYER(ローカル 2P)」切替。デフォルトは VS CPU で、
+  起動直後から 1 人で CPU と対戦できる。
+- **Enter / Space**: `matchOver` 時に新しい試合を開始(`createInitialState()` を再生成)。
+
+### CPU 対戦(`src/sim/bot.ts` の `cpuBot`)
+
+`reactiveBot` をベースに、勝てるが完璧ではない「人間が崩せる」相手として:
+
+- 相手の攻撃に反応してジャスト回避を狙うが、確率的に反応をサボる(`Math.random` 使用)。
+- 間合いを詰めすぎ/離れすぎないよう調整し、相手の硬直時に攻め込む。
+
+`cpuBot` はライブプレイ専用で `Math.random` に依存するため非決定的。
+`simulate.ts` が使う `aggressiveBot` / `reactiveBot` は引き続き決定論的(乱数を使わない)。
+
+### 画面演出(`main.ts` のエフェクトレイヤー)
+
+エンジンの純粋性を保ったまま、tick 前後の `GameState` を diff してイベントを検出し、
+見た目の演出だけを `main.ts` 側のローカル状態として加える:
+
+- **ジャスト回避成立**(`stunTicks` が 0 から増加): 約 120ms のヒットストップ
+  (固定ステップの進行を一時停止、描画は継続)+ 画面フラッシュ + 「JUST!」テキスト。
+- **被弾**(`hp` 減少): 画面シェイク。
 
 ---
 
@@ -114,7 +160,7 @@ src/
   render/
     renderer.ts    GameState → Canvas 描画
   sim/
-    bot.ts         スクリプト AI(aggressive / reactive)
+    bot.ts         スクリプト AI(aggressive / reactive / CPU 対戦用 cpuBot)
     simulate.ts    ヘッドレス対戦ランナー(バランス検証ツール)
   main.ts          ブートストラップ(ループ・入力・描画の結線)
 test/

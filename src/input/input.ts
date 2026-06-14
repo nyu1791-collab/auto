@@ -36,6 +36,14 @@ export class InputManager {
     return inputs;
   }
 
+  /**
+   * 指定したキーがこの tick で「押された瞬間」かどうかを返す(消費しない)。
+   * リスタートやモード切替などのメニュー系操作に使う。
+   */
+  wasJustPressed(key: string): boolean {
+    return this.justPressed.has(key.toLowerCase());
+  }
+
   private readPlayer(keys: KeyMap): PlayerInput {
     let move = 0;
     if (this.pressed.has(keys.left)) move -= 1;

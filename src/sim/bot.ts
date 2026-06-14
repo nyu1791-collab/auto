@@ -58,3 +58,58 @@ export function reactiveBot(reactionDelay: number): Bot {
     return NO_INPUT;
   };
 }
+
+/**
+ * 対人プレイ用の CPU 操作ボット。 `reactiveBot` をベースに、
+ * - ジャスト回避の反応をたまにサボる(skipReactionChance で確率的に無視)
+ * - 間合いの維持(詰めすぎ/離れすぎを調整)
+ * - 相手が硬直/空振り中の好機に攻撃を入れる
+ * という「勝てるけど完璧ではない」プレイを行う。
+ *
+ * Math.random を使うため非決定的。simulate.ts のヘッドレス対戦では使用しないこと。
+ */
+export function cpuBot(reactionDelay = 6, skipReactionChance = 0.35): Bot {
+  return (state, self) => {
+    const me = state.players[self];
+    const opp = state.players[1 - self];
+    if (me.attack || me.dodge || me.stunTicks > 0) return NO_INPUT;
+
+    // 相手の攻撃に反応して回避する(確率的にサボる = 完璧ではない)
+    if (opp.attack && !opp.attack.hasHit) {
+      const spec = ATTACKS[opp.attack.kind];
+      const ticksUntilActive = spec.windup - opp.attack.elapsed;
+      const canDodge = me.dodgeCooldown === 0 && me.stamina >= DODGE.staminaCost;
+      if (
+        ticksUntilActive >= 0 &&
+        ticksUntilActive <= reactionDelay &&
+        canDodge &&
+        Math.random() >= skipReactionChance
+      ) {
+        return { move: 0, dodge: true, attack: null };
+      }
+    }
+
+    const dist = distance(state, self);
+    const lightRange = ATTACKS.light.range;
+
+    // 相手が硬直中(ジャスト回避で隙ができた)、または攻撃の空振り直後で
+    // 間合い内なら攻め込む。
+    if (dist <= lightRange && opp.attack === null && opp.stunTicks > 0) {
+      return { move: 0, dodge: false, attack: Math.random() < 0.5 ? 'heavy' : 'light' };
+    }
+
+    // 間合いの維持: 近すぎたら離れ、遠すぎたら詰める。
+    // 適度な距離ならランダムに軽攻撃を打ち込んで隙を見せる。
+    if (dist > lightRange + 20) {
+      return { move: opp.x > me.x ? 1 : -1, dodge: false, attack: null };
+    }
+    if (dist < lightRange - 30) {
+      return { move: opp.x > me.x ? -1 : 1, dodge: false, attack: null };
+    }
+    if (dist <= lightRange && opp.attack === null && Math.random() < 0.02) {
+      return { move: 0, dodge: false, attack: 'light' };
+    }
+
+    return NO_INPUT;
+  };
+}

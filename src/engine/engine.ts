@@ -15,7 +15,28 @@ function clampX(x: number): number {
  *  次ラウンド/試合終了の遷移が進む。 */
 export function step(state: GameState, inputs: Inputs): GameState {
   if (state.phase === 'matchOver') return state;
-  if (state.phase === 'roundOver') return resetRound(state);
+
+  if (state.phase === 'starting') {
+    const phaseTimer = state.phaseTimer - 1;
+    if (phaseTimer <= 0) {
+      return { ...state, phase: 'fighting', phaseTimer: 0 };
+    }
+    return { ...state, phaseTimer };
+  }
+
+  if (state.phase === 'roundOver') {
+    const phaseTimer = state.phaseTimer - 1;
+    if (phaseTimer <= 0) {
+      const [p0, p1] = state.players;
+      if (p0.roundsWon >= MATCH.roundsToWin || p1.roundsWon >= MATCH.roundsToWin) {
+        const matchWinner: GameState['winner'] =
+          p0.roundsWon >= MATCH.roundsToWin ? 0 : 1;
+        return { ...state, phase: 'matchOver', winner: matchWinner, phaseTimer: 0 };
+      }
+      return resetRound(state);
+    }
+    return { ...state, phaseTimer };
+  }
 
   const players: [PlayerState, PlayerState] = [
     { ...state.players[0], attack: cloneAttack(state.players[0]), dodge: cloneDodge(state.players[0]) },
@@ -118,6 +139,7 @@ export function step(state: GameState, inputs: Inputs): GameState {
 
   let phase: GameState['phase'] = 'fighting';
   let winner: GameState['winner'] = null;
+  let phaseTimer = 0;
 
   if (p0Dead || p1Dead || timeUp) {
     let roundWinner: 0 | 1 | null = null;
@@ -132,13 +154,13 @@ export function step(state: GameState, inputs: Inputs): GameState {
     if (roundWinner !== null) {
       players[roundWinner].roundsWon += 1;
       winner = roundWinner;
-      phase = players[roundWinner].roundsWon >= MATCH.roundsToWin ? 'matchOver' : 'roundOver';
-    } else {
-      phase = 'roundOver';
     }
+    // 試合終了の判定は roundOver のフリーズが終わった後(次の resetRound/matchOver 遷移)で行う。
+    phase = 'roundOver';
+    phaseTimer = MATCH.roundEndFreezeTicks;
   }
 
-  return { tick, roundTick, players, phase, winner };
+  return { tick, roundTick, players, phase, winner, phaseTimer };
 }
 
 function cloneAttack(p: PlayerState): PlayerState['attack'] {

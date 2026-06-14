@@ -1,4 +1,4 @@
-import { ARENA, PLAYER } from './constants';
+import { ARENA, MATCH, PLAYER } from './constants';
 import type { GameState, PlayerState } from './types';
 
 function createPlayer(id: 0 | 1, x: number, facing: 1 | -1): PlayerState {
@@ -24,8 +24,9 @@ export function createInitialState(): GameState {
     tick: 0,
     roundTick: 0,
     players: [createPlayer(0, P0_START_X, 1), createPlayer(1, P1_START_X, -1)],
-    phase: 'fighting',
+    phase: 'starting',
     winner: null,
+    phaseTimer: MATCH.startCountdownTicks,
   };
 }
 
@@ -39,7 +40,8 @@ export function resetRound(state: GameState): GameState {
       { ...createPlayer(0, P0_START_X, 1), roundsWon: p0.roundsWon },
       { ...createPlayer(1, P1_START_X, -1), roundsWon: p1.roundsWon },
     ],
-    phase: 'fighting',
+    phase: 'starting',
     winner: null,
+    phaseTimer: MATCH.startCountdownTicks,
   };
 }
