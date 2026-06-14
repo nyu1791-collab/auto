@@ -8,10 +8,14 @@ const COLORS = {
   p1: '#ff5d5d',
   p1Dark: '#992f2f',
   p1Light: '#ffc2c2',
-  bgTop: '#1c2230',
+  bgTop: '#12161f',
   bgBottom: '#0c0e13',
-  ground: '#2a2f37',
+  skyBand: '#1b2233',
+  horizon: '#39445c',
+  ground: '#232932',
   groundLine: '#3a4250',
+  groundTile: 'rgba(255,255,255,0.04)',
+  groundDark: '#171b22',
   hpBack: '#3a3f47',
   hpChip: '#ffd2a0',
   staminaBack: '#3a3f47',
@@ -119,44 +123,61 @@ export class Renderer {
     }
   }
 
-  /** 背景: グラデーション + 微妙な地平線のアニメーション + 床 */
+  /**
+   * 背景: 完全にフラットな 2D ステージ。
+   * 奥行きを感じさせるグラデーション(床が奥へ暗くなる遠近表現)を排し、
+   * 空・地平線帯・地面スラブをすべて平面的な単色の帯と直線で構成する。
+   */
   private drawBackground(): void {
     const { ctx, canvas } = this;
-
-    const bg = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    bg.addColorStop(0, COLORS.bgTop);
-    bg.addColorStop(1, COLORS.bgBottom);
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // ごく緩やかに明滅する地平線(ロジックに影響しない演出のみ)
-    const pulse = 0.5 + 0.5 * Math.sin(this.time / 4000);
-    ctx.fillStyle = `rgba(255,255,255,${(0.02 + pulse * 0.015).toFixed(3)})`;
-    ctx.fillRect(0, ARENA.floorY - 2, canvas.width, 1);
-
-    // 床
+    const w = canvas.width;
+    const h = canvas.height;
     const floorY = ARENA.floorY + ARENA.playerSize;
-    const ground = ctx.createLinearGradient(0, floorY, 0, canvas.height);
-    ground.addColorStop(0, COLORS.ground);
-    ground.addColorStop(1, COLORS.bgBottom);
-    ctx.fillStyle = ground;
-    ctx.fillRect(0, floorY, canvas.width, canvas.height - floorY);
 
+    // --- 空(フラットな単色) ---
+    ctx.fillStyle = COLORS.bgTop;
+    ctx.fillRect(0, 0, w, floorY);
+
+    // --- 地平線帯(平面的な水平バンド。遠近感は付けない) ---
+    const bandTop = floorY - 80;
+    ctx.fillStyle = COLORS.skyBand;
+    ctx.fillRect(0, bandTop, w, 80);
+    ctx.fillStyle = COLORS.horizon;
+    ctx.fillRect(0, bandTop, w, 2);
+
+    // --- 地面(奥行きなしの単色スラブ) ---
+    ctx.fillStyle = COLORS.ground;
+    ctx.fillRect(0, floorY, w, h - floorY);
+
+    // 地面の上端ライン(立っている面)
     ctx.fillStyle = COLORS.groundLine;
-    ctx.fillRect(0, floorY, canvas.width, 2);
+    ctx.fillRect(0, floorY, w, 3);
+
+    // フラットなタイル割り(等間隔の縦線。透視変換しないので平面に見える)
+    ctx.strokeStyle = COLORS.groundTile;
+    ctx.lineWidth = 1;
+    for (let x = 0; x <= w; x += 40) {
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, floorY + 3);
+      ctx.lineTo(x + 0.5, h);
+      ctx.stroke();
+    }
+
+    // 地面下端のフラットな帯(縁取り)
+    ctx.fillStyle = COLORS.groundDark;
+    ctx.fillRect(0, h - 6, w, 6);
   }
 
-  /** 各ファイターの足元に柔らかい影を描く */
+  /** 各ファイターの足元に、フラットな接地マーク(平面的な細い帯)を描く */
   private drawShadow(p: PlayerState): void {
     const { ctx } = this;
-    const cx = p.x + ARENA.playerSize / 2;
-    const cy = ARENA.floorY + ARENA.playerSize + 4;
+    const x = p.x + ARENA.playerSize * 0.1;
+    const w = ARENA.playerSize * 0.8;
+    const y = ARENA.floorY + ARENA.playerSize + 1;
 
     ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, ARENA.playerSize * 0.55, 6, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.fillRect(x, y, w, 3);
     ctx.restore();
   }
 
