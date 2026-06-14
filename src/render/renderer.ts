@@ -1,6 +1,14 @@
 import { ARENA, ATTACKS, DODGE, JUMP, JUST, MATCH, PLAYER } from '../engine/constants';
 import type { GameState, PlayerState } from '../engine/types';
 
+/** 2D 座標(人型のジョイント位置などに使う簡易型) */
+type Pt = { x: number; y: number };
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+const lerpPt = (a: Pt, b: Pt, t: number): Pt => ({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) });
+/** 減速イージング(0→1 を素早く立ち上げて収束させる)。攻撃の振りの「キレ」に使う */
+const easeOut = (t: number): number => 1 - (1 - t) * (1 - t);
+
 const COLORS = {
   p0: '#4da6ff',
   p0Dark: '#1f5c99',
@@ -78,6 +86,12 @@ export class Renderer {
   private prevVy: [number, number] = [0, 0];
   /** 着地つぶれ(スクワッシュ)演出の残り時間(ms)。プレイヤーごと */
   private landingSquash: [number, number] = [0, 0];
+  /** 直前フレームの x(歩行アニメ判定用)。プレイヤーごと */
+  private prevX: [number, number] = [0, 0];
+  /** 歩行ストライドの位相(移動距離に応じて進む)。プレイヤーごと */
+  private stridePhase: [number, number] = [0, 0];
+  /** 歩行アニメの振幅(0=静止 → 1=歩行中)。移動状態へ滑らかに追従する。プレイヤーごと */
+  private walkAmp: [number, number] = [0, 0];
 
   constructor(private canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -154,6 +168,19 @@ export class Renderer {
         this.landingSquash[i] = Math.max(0, this.landingSquash[i] - dtMs);
       }
       this.prevVy[i] = p.vy;
+
+      // 歩行アニメ: 横移動した距離に応じてストライド位相を進める
+      // (接地中のみ。実際の移動量に同期させて足の運びを地面と合わせる)。
+      const dx = p.x - this.prevX[i];
+      const moving = p.y === 0 && Math.abs(dx) > 0.1;
+      if (moving) {
+        this.stridePhase[i] += dx * 0.45;
+      }
+      // 歩行振幅を移動状態へ滑らかに追従(静止時は脚を立ち姿勢へ戻す)
+      const target = moving ? 1 : 0;
+      const rate = Math.min(1, dtMs / 90);
+      this.walkAmp[i] += (target - this.walkAmp[i]) * rate;
+      this.prevX[i] = p.x;
     }
   }
 
@@ -232,86 +259,313 @@ export class Renderer {
     const { ctx } = this;
     const baseColor = p.id === 0 ? COLORS.p0 : COLORS.p1;
     const trailDir = p.facing; // i-frame 中は facing の逆方向へ移動するため、残像は facing 側に伸ばす
+    const size = ARENA.playerSize;
+    const cx = p.x + size / 2;
+    const footY = ARENA.floorY - p.y + size;
 
+    // 人型のシルエットを簡略化した「縦の残像」を数枚、進行方向側に伸ばす
     const ghostCount = 3;
     for (let i = 1; i <= ghostCount; i++) {
-      const offset = trailDir * i * (ARENA.playerSize * 0.28);
+      const offset = trailDir * i * (size * 0.26);
       const alpha = 0.16 * (1 - i / (ghostCount + 1));
       ctx.save();
       ctx.globalAlpha = alpha;
-      this.drawRoundedRect(
-        p.x + offset,
-        ARENA.floorY - p.y,
-        ARENA.playerSize,
-        ARENA.playerSize,
-        8,
-        baseColor
-      );
+      ctx.strokeStyle = baseColor;
+      ctx.lineWidth = size * 0.42;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(cx + offset, footY - size * 0.86);
+      ctx.lineTo(cx + offset, footY - size * 0.12);
+      ctx.stroke();
       ctx.restore();
     }
   }
 
+  /**
+   * ファイターを人型(頭・胴・両腕両脚)で描く。攻撃・回避・歩行・ジャンプ・被スタンに応じて
+   * 手足のポーズを変化させ、特に攻撃は「引き(windup)→振り(active)→戻り(recovery)」の
+   * モーションをつけて、何の攻撃をいつ出したのかを動きで分かりやすくする。
+   */
   private drawPlayer(p: PlayerState): void {
     const { ctx } = this;
     const isStunned = p.stunTicks > 0;
-    const isAttacking = p.attack !== null && p.attack.elapsed >= ATTACKS[p.attack.kind].windup;
+    const isAttackActive =
+      p.attack !== null &&
+      p.attack.elapsed >= ATTACKS[p.attack.kind].windup &&
+      p.attack.elapsed < ATTACKS[p.attack.kind].windup + ATTACKS[p.attack.kind].active;
     const isIframe = p.dodge !== null && p.dodge.elapsed < DODGE.iframes;
 
-    ctx.save();
-    ctx.globalAlpha = isIframe ? 0.45 : 1;
-
     const size = ARENA.playerSize;
-    const dark = p.id === 0 ? COLORS.p0Dark : COLORS.p1Dark;
     const main = isStunned ? COLORS.stunned : p.id === 0 ? COLORS.p0 : COLORS.p1;
-    const light = p.id === 0 ? COLORS.p0Light : COLORS.p1Light;
+    const dark = p.id === 0 ? COLORS.p0Dark : COLORS.p1Dark;
+    const lightC = p.id === 0 ? COLORS.p0Light : COLORS.p1Light;
 
-    // スクワッシュ&ストレッチ: 着地直後はつぶれ、上昇中は縦に伸び・横に縮む。
-    // 足元(バウンディングボックス下端)を基準に拡縮することで、
-    // 地面/シャドウとの接地感を保ったまま変形させる。
+    // スクワッシュ&ストレッチを足元基準で適用(地面との接地感を保つ)
     const [scaleX, scaleY] = this.jumpSquashScale(p);
-
-    // 足元を原点として平行移動 + スケールする
     const anchorX = p.x + size / 2;
-    const anchorY = ARENA.floorY - p.y + size;
+    const anchorY = ARENA.floorY - p.y + size; // 足元(接地点)
+
+    ctx.save();
+    ctx.globalAlpha = isIframe ? 0.5 : 1;
     ctx.translate(anchorX, anchorY);
     ctx.scale(scaleX, scaleY);
-    const x = -size / 2;
-    const y = -size;
 
-    // 攻撃中 / 被スタン中はグロー(外側の光彩)を描く
-    if (isAttacking || isStunned) {
-      const glowColor = isStunned
-        ? 'rgba(255,255,255,0.55)'
+    const pose = this.computePose(p, size);
+
+    // 攻撃発生中・被スタン中は人型全体をグローさせて状態を強調する
+    if (isAttackActive || isStunned) {
+      ctx.shadowColor = isStunned
+        ? 'rgba(255,255,255,0.6)'
         : p.id === 0
-          ? 'rgba(77,166,255,0.5)'
-          : 'rgba(255,93,93,0.5)';
-      ctx.save();
-      ctx.shadowColor = glowColor;
-      ctx.shadowBlur = isStunned ? 18 : 14;
-      this.drawRoundedRect(x, y, size, size, 8, main);
-      ctx.restore();
+          ? 'rgba(77,166,255,0.65)'
+          : 'rgba(255,93,93,0.65)';
+      ctx.shadowBlur = isStunned ? 14 : 16;
     }
 
-    // ボディ: 縦方向グラデーションの角丸矩形
-    const grad = ctx.createLinearGradient(x, y, x, y + size);
-    grad.addColorStop(0, light);
-    grad.addColorStop(0.45, main);
-    grad.addColorStop(1, dark);
-    this.drawRoundedRect(x, y, size, size, 8, grad);
+    this.drawHumanoid(pose, main, dark, lightC, isStunned);
 
-    // 輪郭線
-    ctx.strokeStyle = isStunned ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.35)';
-    ctx.lineWidth = 2;
-    this.roundedRectPath(x, y, size, size, 8);
+    // 攻撃発生中は斬撃エフェクトで「今攻撃を振った」ことをはっきり見せる
+    if (isAttackActive && p.attack) {
+      this.drawSlash(p, pose, size);
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * プレイヤーの状態から人型の各ジョイント位置(足元中心・上方向が負の局所座標)を計算する。
+   * 攻撃は kind ごとに「引き→振り→戻り」のモーションを与え、回避はしゃがみ、
+   * ジャンプは脚を畳む、被スタンはのけぞる、歩行は脚を交互に振る。
+   */
+  private computePose(p: PlayerState, size: number) {
+    const dir = p.facing;
+    let hipY = -size * 0.42;
+    let shoulderY = -size * 0.72;
+    let headY = -size * 0.86;
+    const headR = size * 0.18;
+    let hipX = 0;
+    let lean = 0; // >0 前傾(facing 方向)、<0 後傾(のけぞり)
+    let crouch = 0; // >0 で上体を沈める
+
+    let fHand: Pt = { x: dir * 9, y: hipY + 3 };
+    let rHand: Pt = { x: -dir * 7, y: hipY + 3 };
+    let fFoot: Pt = { x: dir * 6, y: 0 };
+    let rFoot: Pt = { x: -dir * 6, y: 0 };
+
+    // --- 歩行(接地・非ロック時のみ。脚を交互に、腕を逆位相で振る) ---
+    const amp = this.walkAmp[p.id];
+    if (amp > 0.01 && p.y === 0 && !p.attack && !p.dodge && p.stunTicks === 0) {
+      const s = Math.sin(this.stridePhase[p.id]);
+      fFoot = { x: dir * 6 + s * 6 * amp, y: -Math.max(0, s) * 3 * amp };
+      rFoot = { x: -dir * 6 - s * 6 * amp, y: -Math.max(0, -s) * 3 * amp };
+      fHand = { x: dir * 9 - s * 4 * amp, y: hipY + 3 };
+      rHand = { x: -dir * 7 + s * 4 * amp, y: hipY + 3 };
+    }
+
+    // --- ジャンプ(空中は脚を畳む) ---
+    if (p.y > 0) {
+      fFoot = { x: dir * 5, y: -size * 0.2 };
+      rFoot = { x: -dir * 6, y: -size * 0.26 };
+      fHand = { x: dir * 10, y: shoulderY + 2 };
+      rHand = { x: -dir * 10, y: shoulderY + 2 };
+    }
+
+    // --- 回避(しゃがんで後方へ重心を落とす) ---
+    if (p.dodge) {
+      crouch = 5;
+      lean = -0.35;
+      fFoot = { x: dir * 9, y: 0 };
+      rFoot = { x: -dir * 9, y: 0 };
+      fHand = { x: dir * 4, y: hipY - 2 };
+      rHand = { x: -dir * 2, y: hipY - 2 };
+    }
+
+    // --- 攻撃モーション(発生の前後がはっきり分かるよう大きく動かす) ---
+    if (p.attack) {
+      const spec = ATTACKS[p.attack.kind];
+      const e = p.attack.elapsed;
+      const rest: Pt = { x: dir * 9, y: hipY + 3 };
+      const restR: Pt = { x: -dir * 7, y: hipY + 3 };
+      if (p.attack.kind === 'light') {
+        // 弱: 拳を引いて突き出すジャブ
+        const cocked: Pt = { x: -dir * 5, y: shoulderY + 2 };
+        const ext: Pt = { x: dir * size * 0.72, y: shoulderY + 1 };
+        rHand = { x: -dir * 8, y: hipY };
+        if (e < spec.windup) {
+          const t = easeOut((e + 1) / spec.windup);
+          fHand = lerpPt(rest, cocked, t);
+          lean = -0.45 * t;
+        } else if (e < spec.windup + spec.active) {
+          const t = easeOut((e - spec.windup + 1) / spec.active);
+          fHand = lerpPt(cocked, ext, t);
+          lean = lerp(-0.45, 0.7, t);
+          fFoot = { x: dir * 10, y: 0 };
+        } else {
+          const t = (e - spec.windup - spec.active) / spec.recovery;
+          fHand = lerpPt(ext, rest, t);
+          lean = 0.7 * (1 - t);
+        }
+      } else {
+        // 強: 両手を振りかぶって前方へ叩き込む大振り
+        const up: Pt = { x: dir * 2, y: headY - 10 };
+        const upR: Pt = { x: -dir * 3, y: headY - 7 };
+        const down: Pt = { x: dir * size * 0.64, y: hipY - 2 };
+        const downR: Pt = { x: dir * 10, y: hipY - 6 };
+        if (e < spec.windup) {
+          const t = easeOut((e + 1) / spec.windup);
+          fHand = lerpPt(rest, up, t);
+          rHand = lerpPt(restR, upR, t);
+          lean = -0.6 * t;
+        } else if (e < spec.windup + spec.active) {
+          const t = easeOut((e - spec.windup + 1) / spec.active);
+          fHand = lerpPt(up, down, t);
+          rHand = lerpPt(upR, downR, t);
+          lean = lerp(-0.6, 0.85, t);
+          fFoot = { x: dir * 12, y: 0 };
+          crouch = 2 * t;
+        } else {
+          const t = (e - spec.windup - spec.active) / spec.recovery;
+          fHand = lerpPt(down, rest, t);
+          rHand = lerpPt(downR, restR, t);
+          lean = 0.85 * (1 - t);
+        }
+      }
+    }
+
+    // --- 被スタン(のけぞり + ふらつき) ---
+    if (p.stunTicks > 0) {
+      lean = -0.55;
+      const wob = Math.sin(this.time * 0.025);
+      hipX += wob * 2;
+      fHand = { x: dir * 11, y: shoulderY + 5 };
+      rHand = { x: -dir * 11, y: shoulderY + 3 };
+    }
+
+    // crouch を上体へ反映(足は接地のまま上体を沈める)
+    hipY += crouch;
+    shoulderY += crouch;
+    headY += crouch;
+
+    // lean を高さに応じた x オフセットとして反映(上ほど大きく傾く)
+    const hip: Pt = { x: hipX, y: hipY };
+    const shoulder: Pt = { x: hipX + dir * lean * 9, y: shoulderY };
+    const head = { x: hipX + dir * lean * 15, y: headY, r: headR };
+
+    // 腕は肩の傾き・沈み込みに追従させる
+    const shoOff = shoulder.x * 0.5;
+    fHand = { x: fHand.x + shoOff, y: fHand.y + crouch * 0.6 };
+    rHand = { x: rHand.x + shoOff, y: rHand.y + crouch * 0.6 };
+
+    const fElbow: Pt = { x: (shoulder.x + fHand.x) / 2, y: (shoulder.y + fHand.y) / 2 + 3 };
+    const rElbow: Pt = { x: (shoulder.x + rHand.x) / 2, y: (shoulder.y + rHand.y) / 2 + 3 };
+    const fKnee: Pt = { x: (hip.x + fFoot.x) / 2 + dir * 2, y: (hip.y + fFoot.y) / 2 - 1 };
+    const rKnee: Pt = { x: (hip.x + rFoot.x) / 2 + dir * 2, y: (hip.y + rFoot.y) / 2 - 1 };
+
+    return { head, hip, shoulder, fHand, rHand, fElbow, rElbow, fFoot, rFoot, fKnee, rKnee, dir };
+  }
+
+  /** 2 関節の手足(肩/腰→肘/膝→手/足)を、暗い縁取り + 主色のカプセルで描く */
+  private limb(a: Pt, m: Pt, b: Pt, width: number, color: string, outline: string): void {
+    const { ctx } = this;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(m.x, m.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = width + 2;
     ctx.stroke();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.stroke();
+  }
 
-    // 向いている方向を示す「目」マーク
-    const eyeSize = size * 0.12;
-    const eyeY = y + size * 0.3;
-    const eyeX = p.facing > 0 ? x + size * 0.72 : x + size * 0.28 - eyeSize;
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.fillRect(eyeX, eyeY, eyeSize, eyeSize);
+  /** 円(拳・関節の丸み)を塗る小ヘルパー */
+  private dot(p: Pt, r: number, color: string): void {
+    const { ctx } = this;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
 
+  /** computePose の結果から人型を奥→手前の順に描画する */
+  private drawHumanoid(
+    pose: ReturnType<Renderer['computePose']>,
+    main: string,
+    dark: string,
+    lightC: string,
+    isStunned: boolean
+  ): void {
+    const outline = isStunned ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.4)';
+    const legW = 5;
+    const armW = 4.5;
+    const torsoW = 11;
+
+    // 奥側(後ろ脚・後ろ腕)はやや暗くして奥行きを出す
+    this.limb(pose.hip, pose.rKnee, pose.rFoot, legW, dark, outline);
+    this.limb(pose.shoulder, pose.rElbow, pose.rHand, armW, dark, outline);
+    this.dot(pose.rHand, armW * 0.7, dark);
+
+    // 胴体(肩↔腰の太いカプセル)
+    const torsoMid: Pt = {
+      x: (pose.shoulder.x + pose.hip.x) / 2,
+      y: (pose.shoulder.y + pose.hip.y) / 2,
+    };
+    this.limb(pose.shoulder, torsoMid, pose.hip, torsoW, main, outline);
+
+    // 頭(縁取り → 主色 → ハイライト → 向きを示す目)
+    this.dot(pose.head, pose.head.r + 1, outline);
+    this.dot(pose.head, pose.head.r, main);
+    this.dot(
+      { x: pose.head.x - pose.dir * pose.head.r * 0.3, y: pose.head.y - pose.head.r * 0.3 },
+      pose.head.r * 0.4,
+      lightC
+    );
+    this.dot(
+      { x: pose.head.x + pose.dir * pose.head.r * 0.45, y: pose.head.y - pose.head.r * 0.05 },
+      pose.head.r * 0.22,
+      isStunned ? '#444' : 'rgba(0,0,0,0.8)'
+    );
+
+    // 手前側(前脚・前腕・拳)は主色で最前面に
+    this.limb(pose.hip, pose.fKnee, pose.fFoot, legW, main, outline);
+    this.limb(pose.shoulder, pose.fElbow, pose.fHand, armW, main, outline);
+    this.dot(pose.fHand, armW * 0.85, main);
+  }
+
+  /**
+   * 攻撃の active 中に、振り抜きの弧(斬撃エフェクト)を攻撃側の前方に描く。
+   * 弱は素早く短い白〜黄の streak、強は大きく赤〜橙の弧。ap(active 進行度)に応じて
+   * 後方から前方へ掃き、攻撃を出した瞬間を視覚的に強調する。
+   */
+  private drawSlash(p: PlayerState, pose: ReturnType<Renderer['computePose']>, size: number): void {
+    if (!p.attack) return;
+    const { ctx } = this;
+    const spec = ATTACKS[p.attack.kind];
+    const ap = Math.min(1, (p.attack.elapsed - spec.windup + 1) / spec.active);
+    const dir = pose.dir;
+    const heavy = p.attack.kind === 'heavy';
+    const rgb = heavy ? '255, 130, 70' : '255, 230, 140';
+    const reach = heavy ? size * 1.0 : size * 0.8;
+    const cx = pose.shoulder.x;
+    const cy = heavy ? pose.shoulder.y - 2 : pose.shoulder.y + 1;
+    const base = dir > 0 ? 0 : Math.PI;
+    const spread = heavy ? 1.2 : 0.7;
+    const start = base - dir * spread;
+    const end = start + dir * spread * 2 * Math.min(1, ap * 1.25);
+    const alpha = 0.75 * (1 - ap * 0.5);
+
+    ctx.save();
+    ctx.shadowColor = `rgba(${rgb}, 0.8)`;
+    ctx.shadowBlur = 10;
+    ctx.strokeStyle = `rgba(${rgb}, ${alpha.toFixed(2)})`;
+    ctx.lineWidth = heavy ? 7 : 5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(cx, cy, reach, Math.min(start, end), Math.max(start, end));
+    ctx.stroke();
     ctx.restore();
   }
 
