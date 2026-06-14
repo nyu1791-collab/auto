@@ -254,8 +254,12 @@ function handleMenuInputs(): void {
   }
 }
 
+// 1 フレームで進める時間の上限(ms)。タブを離れて戻ったときなど巨大な delta で
+// シミュレーションが一気に早送り(=スパイラル)するのを防ぐためにクランプする。
+const MAX_FRAME_MS = 250;
+
 function loop(now: number): void {
-  const delta = now - lastTime;
+  const delta = Math.min(now - lastTime, MAX_FRAME_MS);
   lastTime = now;
 
   // エフェクトのタイマーは常に進行させる(ヒットストップ中でも経過させてよい)
