@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>刹那 — Just-Dodge Duel</title>
+    <style>
+      body {
+        margin: 0;
+        background: #0b0d10;
+        color: #e6e6e6;
+        font-family: system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+      }
+      canvas {
+        background: #15181d;
+        border: 1px solid #2a2f37;
+        image-rendering: pixelated;
+      }
+      .controls {
+        font-size: 13px;
+        color: #8a93a0;
+        margin-top: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game" width="800" height="450"></canvas>
+    <div class="controls">
+      P1: A/D 移動 · W 回避 · F 弱 · G 強 &nbsp;|&nbsp; P2: ←/→ 移動 · ↑ 回避 · K 弱 · L 強
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,69 @@
+/**
+ * ゲームロジックの共有型(契約)。ブラウザ API に依存しない。
+ */
+
+export type AttackKind = 'light' | 'heavy';
+export type Facing = 1 | -1;
+
+/** どちらのプレイヤーか */
+export type PlayerId = 0 | 1;
+
+/** 1 プレイヤーの入力(この tick の意図) */
+export interface PlayerInput {
+  /** -1 = 左, 0 = 静止, 1 = 右 */
+  move: -1 | 0 | 1;
+  /** 回避を開始しようとしているか(押した瞬間に true) */
+  dodge: boolean;
+  /** この tick に開始したい攻撃。なければ null */
+  attack: AttackKind | null;
+}
+
+/** 攻撃の進行状態 */
+export interface AttackState {
+  kind: AttackKind;
+  /** 攻撃開始からの経過 tick */
+  elapsed: number;
+  /** この攻撃で既にヒットを与えたか(多段ヒット防止) */
+  hasHit: boolean;
+}
+
+/** 回避の進行状態 */
+export interface DodgeState {
+  /** 回避開始からの経過 tick */
+  elapsed: number;
+  /** 回避を開始した「マッチ全体の」tick(ジャスト判定に使用) */
+  startedAtTick: number;
+}
+
+export interface PlayerState {
+  id: PlayerId;
+  x: number;
+  facing: Facing;
+  hp: number;
+  stamina: number;
+  /** 攻撃中なら状態、なければ null */
+  attack: AttackState | null;
+  /** 回避中なら状態、なければ null */
+  dodge: DodgeState | null;
+  /** 0 より大きい間は硬直(行動不能)。ジャスト回避を受けると設定される */
+  stunTicks: number;
+  /** 回避クールダウン残 tick */
+  dodgeCooldown: number;
+  /** ラウンド取得数 */
+  roundsWon: number;
+}
+
+export type RoundPhase = 'fighting' | 'roundOver' | 'matchOver';
+
+export interface GameState {
+  /** マッチ開始からの累積 tick */
+  tick: number;
+  /** 現在ラウンドの経過 tick */
+  roundTick: number;
+  players: [PlayerState, PlayerState];
+  phase: RoundPhase;
+  /** ラウンド/マッチの勝者。fighting 中は null */
+  winner: PlayerId | null;
+}
+
+export type Inputs = [PlayerInput, PlayerInput];
