@@ -6,6 +6,7 @@ import { AudioEngine } from './audio/audio';
 import { InputManager } from './input/input';
 import { TouchControls } from './input/touch';
 import { ParticleSystem } from './render/particles';
+import { FloatingTextSystem } from './render/floatingText';
 import { Renderer, type RenderEffects } from './render/renderer';
 import { CPU_DIFFICULTIES, cpuBot, type CpuDifficulty } from './sim/bot';
 
@@ -15,6 +16,7 @@ const renderer = new Renderer(canvas);
 const input = new InputManager(window);
 const audio = new AudioEngine();
 const particles = new ParticleSystem();
+const floatingTexts = new FloatingTextSystem();
 const touch = new TouchControls(input, viewport);
 
 // 最初のユーザー操作で AudioContext をアンロックする(iOS Safari 対策)。
@@ -157,6 +159,14 @@ function detectEvents(prev: GameState, next: GameState): void {
       const kind = damage >= ATTACKS.heavy.damage ? 'heavy' : 'light';
       const color = i === 0 ? '#4da6ff' : '#ff5d5d';
       particles.sparks(center.x, center.y, color, kind === 'heavy' ? 20 : 12);
+      // 被弾位置にダメージ量を浮かび上がらせる(強は大きく橙、弱は小さく白)
+      floatingTexts.spawn(
+        center.x,
+        center.y - ARENA.playerSize * 0.45,
+        `${Math.round(damage)}`,
+        kind === 'heavy' ? '#ffb070' : '#ffffff',
+        kind === 'heavy' ? 24 : 17
+      );
       audio.hit(kind);
     }
 
@@ -275,6 +285,7 @@ function loop(now: number): void {
   }
 
   particles.update(delta);
+  floatingTexts.update(delta);
 
   const modeLabel = vsCpu
     ? `VS CPU [${cpuDifficulty.toUpperCase()}] (C:対戦切替 V:難易度)`
@@ -285,7 +296,10 @@ function loop(now: number): void {
   const effects: RenderEffects = {
     modeLabel: `${modeLabel}  ${muteIcon} M:ミュート  ${assistIcon} H:アシスト`,
     showJustCue,
-    worldOverlay: (ctx) => particles.draw(ctx),
+    worldOverlay: (ctx) => {
+      particles.draw(ctx);
+      floatingTexts.draw(ctx);
+    },
   };
 
   if (shakeRemaining > 0) {

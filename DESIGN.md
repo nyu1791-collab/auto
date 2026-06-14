@@ -274,6 +274,11 @@ import されることは一切ない。`npm run sim` とエンジンのユニ�
 - `update(dtMs)` で運動・寿命を更新し、`draw(ctx)` で `life/maxLife` を alpha として描画する。
   総数は `MAX_PARTICLES`(400)で上限管理する。
 
+`FloatingTextSystem`(`src/render/floatingText.ts`)は被弾位置に浮かび上がるダメージ数値を
+管理する別系統の演出。`spawn(x, y, text, color, size)` で生成し、ゆっくり上昇しながらフェード、
+出現直後に少し拡大する。強攻撃は大きく橙、弱攻撃は小さく白で表示し、被弾量を分かりやすく伝える
+(パーティクル同様 `worldOverlay` 経由で画面シェイクの内側に描画、決定性に影響しない)。
+
 ### 7.4 レンダラー強化(`src/render/renderer.ts`)
 
 `RenderEffects` に `worldOverlay?: (ctx) => void` を追加し、画面シェイク変換の内側・
@@ -361,6 +366,7 @@ src/
   render/
     renderer.ts    GameState → Canvas 描画
     particles.ts   演出パーティクルシステム
+    floatingText.ts フローティングテキスト(被弾ダメージ数値)
   sim/
     bot.ts         スクリプト AI(aggressive / reactive / CPU 対戦用 cpuBot)
     simulate.ts    ヘッドレス対戦ランナー(バランス検証ツール)
