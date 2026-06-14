@@ -1,4 +1,4 @@
-import { ARENA, ATTACKS, JUST, TPS } from './engine/constants';
+import { ARENA, ATTACKS, DODGE, JUST, TPS } from './engine/constants';
 import { step } from './engine/engine';
 import { createInitialState } from './engine/state';
 import type { GameState, Inputs } from './engine/types';
@@ -223,6 +223,27 @@ function detectEvents(prev: GameState, next: GameState): void {
   }
 }
 
+/**
+ * 入力に対するフィードバック演出。回避を入力したのにスタミナ不足で出せなかったとき、
+ * 「スタミナ不足!」を表示してスタミナ管理を分かりやすく伝える(クールダウン中は無言)。
+ * 人間プレイヤー(VS CPU は P1、VS PLAYER は両者)のみ対象。fighting 中のみ。
+ */
+function detectInputFeedback(prev: GameState, ins: Inputs, next: GameState): void {
+  if (prev.phase !== 'fighting') return;
+  for (let i = 0; i < 2; i++) {
+    const human = i === 0 || !vsCpu;
+    if (!human) continue;
+    const p = prev.players[i];
+    if (!ins[i].dodge || ins[i].attack !== null) continue; // 回避入力のみを対象
+    const actionable = !p.attack && !p.dodge && p.stunTicks === 0;
+    const startedDodge = !p.dodge && next.players[i].dodge !== null;
+    if (actionable && !startedDodge && p.stamina < DODGE.staminaCost) {
+      const center = playerCenter(next.players[i]);
+      floatingTexts.spawn(center.x, center.y - ARENA.playerSize * 0.55, 'スタミナ不足!', '#ff8a8a', 13);
+    }
+  }
+}
+
 function currentInputs(): Inputs {
   const polled = input.poll();
   if (vsCpu) {
@@ -285,6 +306,7 @@ function loop(now: number): void {
       const inputs = currentInputs();
       const next = step(state, inputs);
       detectEvents(state, next);
+      detectInputFeedback(state, inputs, next);
       state = next;
       accumulator -= TICK_MS;
 
