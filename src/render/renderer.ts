@@ -463,6 +463,15 @@ export class Renderer {
       hipX -= dir * 2 * f; // 重心も後ろへ引く
     }
 
+    // --- アイドル時の微かな呼吸(立ち止まっているキャラにも生命感を与える) ---
+    if (p.y === 0 && !p.attack && !p.dodge && p.stunTicks === 0 && this.walkAmp[p.id] < 0.2) {
+      const breathe = Math.sin(this.time * 0.004 + p.id * 1.7) * 1.1; // 二体が同位相で揺れないよう id でずらす
+      shoulderY += breathe;
+      headY += breathe * 1.2;
+      fHand.y += breathe * 0.5;
+      rHand.y += breathe * 0.5;
+    }
+
     // crouch を上体へ反映(足は接地のまま上体を沈める)
     hipY += crouch;
     shoulderY += crouch;
