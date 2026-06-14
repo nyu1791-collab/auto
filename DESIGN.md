@@ -1,15 +1,18 @@
 # 刹那 (SETSUNA) — Just-Dodge Duel
 
-1対1のリアルタイム対戦ゲーム。コアは **「ジャスト回避(Just Dodge)」**。
-攻撃は必ず回避可能で、保証されたチップダメージは存在しない。
+1対1のリアルタイム 3D 対戦ゲーム。コアは **「ジャスト回避(Just Dodge)」** と
+**「サイドステップ」**。攻撃は必ず回避可能で、保証されたチップダメージは存在しない。
 **完璧にプレイすれば一切ダメージを受けない** — 強さは完全にプレイヤーの腕前で決まる。
-
-> 設計者: Opus / 実装: Sonnet
 
 ---
 
 ## 1. デザインの核
 
+- 戦場は円形の 3D アリーナ。両者は常に**ロックオン状態**(自動的に相手の方を向く)で、
+  移動入力は「相手を正面とした相対方向」(前後 = 接近/後退、左右 = サイドステップ)として扱われる。
+- 攻撃には向き(`aimAngle`)があり、発生(windup)開始時点の自分の正面方向に固定される。
+  ヒット判定は扇形(`arcHalfAngle`)で行われるため、**真横へのサイドステップで攻撃の正面から
+  外れれば、間合い内でも攻撃を回避できる**(間合い管理だけが防御手段ではない)。
 - すべての攻撃は正しいタイミングの回避で完全に無効化できる。
 - 回避は**スタミナ**を消費する。連打できない。ミスした回避はスタミナを枯渇させ、次の攻撃を受ける原因になる。
 - **ジャスト回避**(攻撃の発生直前に反応して出した精密な回避)は、ダメージ無効に加えて報酬を与える:
@@ -17,7 +20,8 @@
   - 消費スタミナを全額還元(精密さの持続的な見返り)
 - 早すぎる「読み回避」や連打回避はダメージは防げても報酬なし。さらにスタミナを浪費する。
 
-この「スタミナ × 反応精度」の二軸が、上達するほど被ダメージがゼロに近づくという**高い技量天井**を生む。
+この「アリーナでの位置取り(サイドステップ)× スタミナ × 反応精度」の三軸が、
+上達するほど被ダメージがゼロに近づくという**高い技量天井**を生む。
 
 ---
 
@@ -29,15 +33,28 @@
 
 ---
 
-## 3. プレイヤーパラメータ
+## 3. 座標系・アリーナ・ロックオン
 
-| 項目       | 値                                      |
-| ---------- | --------------------------------------- |
-| HP         | 100                                     |
-| スタミナ   | 最大 100 / 回復 25 per sec(≈0.417/tick) |
-| 移動速度   | 3 px/tick                               |
-| サイズ     | 40 px                                   |
-| アリーナ幅 | 800 px                                  |
+- 戦場は **円形の 3D アリーナ**。中心を原点 `(0, 0)` とする x-z 平面上で全ての位置を扱う
+  (y は常に 0。見た目の高さは描画レイヤーのみで使用)。
+- アリーナ半径 `ARENA.radius = 320`、プレイヤーの当たり半径 `ARENA.playerRadius = 16`。
+  プレイヤー中心は `hypot(x, z) <= radius - playerRadius` の円内に拘束される
+  (`clampToArena`)。
+- **ロックオン**: 両者は常に相手の方を向く。`facing = atan2(opp.z - self.z, opp.x - self.x)`
+  を `fighting` 中は毎 tick 再計算する。`facing` から `facingVec = (cos f, sin f)`
+  (正面方向)と `rightVec = (sin f, -cos f)`(右方向)が決まる。
+- **入力の意味**: `PlayerInput.move = { forward, strafe }` はロックオン基準の相対値。
+  `forward = 1` は相手へ接近、`forward = -1` は後退、`strafe` は左右のサイドステップ。
+  実際の移動ベクトルは `facingVec * forward + rightVec * strafe` を正規化した方向に
+  `PLAYER.moveSpeed` を乗じたもの。
+
+| 項目         | 値                                      |
+| ------------ | --------------------------------------- |
+| HP           | 100                                     |
+| スタミナ     | 最大 100 / 回復 25 per sec(≈0.417/tick) |
+| 移動速度     | 3 ワールド単位/tick                    |
+| 当たり半径   | 16 ワールド単位                        |
+| アリーナ半径 | 320 ワールド単位                       |
 
 ---
 
@@ -45,23 +62,36 @@
 
 ### 攻撃
 
-| 攻撃      | 発生(windup) | 持続(active) | 硬直(recovery) | ダメージ | 間合い |
-| --------- | ------------ | ------------ | -------------- | -------- | ------ |
-| 弱(Light) | 9 (150ms)    | 2            | 12             | 10       | 70 px  |
-| 強(Heavy) | 27 (450ms)   | 3            | 30             | 30       | 90 px  |
+| 攻撃      | 発生(windup) | 持続(active) | 硬直(recovery) | ダメージ | 間合い | 扇角(arcHalfAngle) |
+| --------- | ------------ | ------------ | -------------- | -------- | ------ | ------------------- |
+| 弱(Light) | 9 (150ms)    | 2            | 12             | 10       | 70     | 0.60 rad(≈34.4°)   |
+| 強(Heavy) | 27 (450ms)   | 3            | 30             | 30       | 90     | 0.52 rad(≈29.8°)   |
 
-- ヒット判定は active フレーム中、間合い内にいる相手に発生。
+- **方向の確定(`aimAngle`)**: 攻撃の windup 開始時、その瞬間の自分の `facing` を
+  `aimAngle` として攻撃に固定する。以降ロックオンで `facing` が変化しても、
+  既に発生済みの攻撃の判定方向は変わらない(「打った瞬間の正面」に向かって攻撃が出る)。
+- **ヒット判定(扇形)**: active フレーム中、`dist = hypot(defender.x - attacker.x, defender.z - attacker.z)`
+  が間合い以内、かつ `angleToDefender = atan2(dz, dx)` と `aimAngle` の差
+  `delta = normalizeAngle(angleToDefender - aimAngle)` が `|delta| <= arcHalfAngle`
+  の場合のみ命中する。間合い内でも扇の外(サイドステップで真横や背後に回り込んだ場合)は
+  **空振り**になる。
 - 攻撃中は移動不可。
 
 ### 回避(Dodge)
 
-| 項目          | 値                                                                           |
-| ------------- | ---------------------------------------------------------------------------- |
-| 無敵(i-frame) | 開始から 11 tick(≈180ms)                                                     |
-| 総持続        | 18 tick                                                                      |
-| クールダウン  | 持続終了後 6 tick                                                            |
-| スタミナ消費  | 35                                                                           |
-| 移動          | 回避方向へ 2 px/tick × i-frame 中(最大 22px。攻撃の間合いより十分小さく保つ) |
+| 項目          | 値                                                                              |
+| ------------- | -------------------------------------------------------------------------------- |
+| 無敵(i-frame) | 開始から 11 tick(≈180ms)                                                        |
+| 総持続        | 18 tick                                                                         |
+| クールダウン  | 持続終了後 6 tick                                                               |
+| スタミナ消費  | 35                                                                              |
+| 移動          | ダッシュ方向(`dirX, dirZ`)へ 2 ワールド単位/tick × i-frame 中(最大 22 単位)  |
+
+- **ダッシュ方向の確定(`dirX, dirZ`)**: 回避開始時の移動入力 `{forward, strafe}` が
+  ニュートラルでなければ、その方向(ロックオン基準、`facingVec`/`rightVec` で
+  ワールド座標に変換・正規化)へダッシュする(= **サイドステップ回避**)。
+  入力がニュートラルなら `-facingVec`(その場で後方へバックステップ)になる。
+  この方向は回避開始時に固定され、ロックオンの変化による影響は受けない。
 
 ### ジャスト回避の判定ルール(重要)
 
@@ -107,10 +137,12 @@
 
 ## 6. 操作(ローカル 2P / 1キーボード)
 
-|            | 移動  | 回避 | 弱  | 強  |
-| ---------- | ----- | ---- | --- | --- |
-| P1(左・青) | A / D | W    | F   | G   |
-| P2(右・赤) | ← / → | ↑    | K   | L   |
+移動はすべて**ロックオン基準の相対方向**(前後 = 接近/後退、左右 = サイドステップ)。
+
+|              | 前後  | 左右(サイドステップ) | 回避  | 弱  | 強  |
+| ------------ | ----- | ---------------------- | ----- | --- | --- |
+| P1(青)       | W / S | A / D                   | Shift | F   | G   |
+| P2(赤)       | ↑ / ↓ | ← / →                   | /     | K   | L   |
 
 追加操作:
 
@@ -174,20 +206,26 @@ import されることは一切ない。`npm run sim` とエンジンのユニ�
 
 ### 7.1 タッチ操作(`src/input/touch.ts`)
 
-`TouchControls` クラスが、Pointer Events を使った画面上のボタン群を DOM に生成し、
-`InputManager.pressVirtual` / `releaseVirtual`(キーボードの keydown/keyup と同じ
-セマンティクスを持つ「仮想キー」API)に直結する。
+`TouchControls` クラスが、Pointer Events を使った画面上の操作 UI を DOM に生成し、
+`InputManager.setStick` / `pressVirtual` / `releaseVirtual`(キーボードの keydown/keyup
+と同じセマンティクスを持つ「仮想キー」API)に直結する。画面は **左半分 =
+バーチャルアナログスティック(移動)、右半分 = アクションボタン(回避/弱/強)** に分割する。
 
-- **P1 操作クラスタ**(常時表示): ◀('a')・▶('d')・回避('w')・弱('f')・強('g')。
-  移動は画面左下、攻撃ボタンは右下、回避は他より大きいボタンとして強調配置。
-- **P2 操作クラスタ**: `setTwoPlayer(true)`(VS PLAYER モード)のときのみ、P1 と左右反転した
-  配置で画面右側に表示する。タブレットを横向きに置いた対面プレイを想定。
+- **`VirtualStick`**: ベース円内をドラッグした中心からの相対ベクトルを
+  `{forward, strafe}`(画面上方向 = forward+、右方向 = strafe+)に変換し、
+  `InputManager.setStick(player, forward, strafe)` を呼ぶ。離すと `(0, 0)` に戻る。
+  ロックオン基準の相対入力であるキーボードの WASD / 矢印と同じ意味を持つ。
+- **P1 レイヤー**(画面下、常時表示): 左にスティック、右に弱('f')・強('g')・
+  回避('shift')のアクションボタン。
+- **P2 レイヤー**(画面上)): `setTwoPlayer(true)`(VS PLAYER モード)のときのみ表示。
+  P1 と 180° 反転した配置(対面プレイ用)で、スティック='/'系ではなく同じ
+  `setStick(1, ...)`、ボタンは弱('k')・強('l')・回避('/')。
 - **メニュー行**(上部、常時表示): 対戦切替('c')・難易度('v')・ミュート('m')・
   リスタート('enter')。これらは「タップした瞬間だけ」反応すればよいため、
   `pressVirtual` 直後に `releaseVirtual` して `justPressed` にのみ残す(`momentary`)。
-- 各ボタンは `pointerdown`/`pointerup`/`pointercancel`/`pointerleave` +
-  `setPointerCapture` + `preventDefault` で実装され、ボタンごとに独立した
-  ポインタを扱うためマルチタッチ(例: ◀ を押しながら回避をタップ)に対応する。
+- 各ボタン/スティックは `pointerdown`/`pointermove`/`pointerup`/`pointercancel` +
+  `setPointerCapture` + `preventDefault` で実装され、要素ごとに独立したポインタを
+  扱うためマルチタッチ(例: スティックを操作しながら回避をタップ)に対応する。
 - `isTouchDevice()` が `window.matchMedia('(pointer: coarse)').matches` または
   `'ontouchstart' in window` でタッチ環境を検出し、該当時のみ UI を表示する
   (CSS クラス `tc-visible` の切替)。
@@ -204,43 +242,64 @@ import されることは一切ない。`npm run sim` とエンジンのユニ�
 
 ### 7.3 パーティクル(`src/render/particles.ts`)
 
-`ParticleSystem` クラスが `{x, y, vx, vy, life, maxLife, size, color, gravity}` の
-シンプルなパーティクルを管理する(`Math.random` 使用、視覚効果のみで決定性に影響しない)。
+`ParticleSystem` クラスが Three.js の `THREE.Points`(`object3D`)上で 3D ワールド座標
+`(x, y, z)` のパーティクルを管理する(`Math.random` 使用、視覚効果のみで決定性に影響しない)。
 
-- `sparks(x, y, color, count)`: ヒット時の火花。
-- `burst(x, y, color, count)`: ジャスト回避成立時の放射状バースト。
-- `dust(x, y, dir)`: 回避時に進行方向へ広がる砂塵。
-- `update(dtMs)` で運動・寿命を更新し、`draw(ctx)` で `life/maxLife` を alpha として描画する。
-  総数は `MAX_PARTICLES`(400)で上限管理する。
+- `sparks(x, y, z, color, count)`: ヒット時の火花。
+- `burst(x, y, z, color, count)`: ジャスト回避成立時の放射状バースト。
+- `dust(x, y, z, dirX, dirZ)`: 回避のダッシュ方向 `(dirX, dirZ)` の後方へ広がる砂塵。
+- `update(dtMs)` で運動・寿命を更新し、`position`/`color`/`size` の `BufferAttribute` へ
+  書き込む(`needsUpdate = true`)。総数は `MAX_PARTICLES`(600)で上限管理する。
+- `object3D` を `Renderer.addParticles()` で `THREE.Scene` に追加することで描画に統合する。
 
-### 7.4 レンダラー強化(`src/render/renderer.ts`)
+### 7.4 3D レンダラー(`src/render/renderer.ts`)
 
-`RenderEffects` に `worldOverlay?: (ctx) => void` を追加し、画面シェイク変換の内側・
-キャラクター描画より後・HUD より前で呼び出す(`main.ts` から `particles.draw(ctx)` を渡す)。
+`Renderer` クラスは Three.js の `WebGLRenderer` + `PerspectiveCamera`(視野角 45°)で
+円形アリーナをレンダリングする。
 
-主な視覚強化:
+- **アリーナ**: `CircleGeometry(ARENA.radius, 64)` の床に、同心円のグリッドリング +
+  放射状のスポークをライン描画。外周にはグロー用の `RingGeometry` を重ねる。
+  `Scene.fog` で奥行きの霧効果を付与。
+- **キャラクター**: `CapsuleGeometry` のボディ + 正面方向を示す `BoxGeometry` の
+  「バイザー」(`facing` 方向、`group.rotation.y = -p.facing` で向きを反映)。
+  攻撃中・被スタン中は半透明のグローシェル(`MeshBasicMaterial`)を点灯させ、
+  回避の i-frame 中は本体の opacity を下げて透過させる。
+- **アフターイメージ**: 回避の i-frame 中、ダッシュ方向 `(dirX, dirZ)` の後方に
+  半透明の残像メッシュ(`CapsuleGeometry` 3 体)を表示する。
+- **攻撃テレグラフ**: 攻撃の windup 中、`aimAngle ± arcHalfAngle` の扇形
+  (`CircleGeometry` の `thetaStart`/`thetaLength` を間合いに応じて再構築)を
+  地面に表示し、攻撃の方向と射程・判定範囲を視覚化する(弱攻撃=黄、強攻撃=赤)。
+- **カメラ**: 両者の中間点を `lookTarget` として追従し(lerp)、両者の距離に応じて
+  `camDistance` を補間してズーム調整する。`RenderEffects.shakeX/shakeY` を
+  カメラ位置・注視点の両方に加算して画面シェイクを表現する。
+- `RenderEffects.flashAlpha` は半透明の白いオーバーレイ `<div>`(キャンバスの親要素に
+  重ねる)の opacity として反映する。
+- `handleResize()` でキャンバスの実サイズに合わせて `renderer.setSize` /
+  `camera.aspect` を更新する(`ResizeObserver` + `window.resize` から呼び出す)。
 
-- グラデーション背景・床・各ファイターの足元シャドウ。
-- キャラクターを角丸ボディ + グラデーション塗りで描画し、`facing` 方向を示す
-  「目」マークを追加。攻撃中・被スタン中はグロー(`shadowBlur`)で強調。
-- 回避の i-frame 中(`dodge.elapsed < DODGE.iframes`)は進行方向に半透明の
-  残像(アフターイメージ)を描画。
-- HUD の HP バーは Renderer 内部に保持する「表示用 HP」を実値へ毎フレーム補間
-  (lerp)させ、滑らかに減少させる。直前の減少分は薄い色の
-  「チップダメージ」として一時的に残してフェードアウトする
-  (この補間状態は描画専用で、ゲームロジック・決定性には影響しない)。
-- WINS 表示をピップ(丸印)化し、READY/FIGHT! やラウンド/マッチ結果画面に
-  フェード・スケールの演出を追加。「JUST!」テキストは `justTextAlpha` に応じて
-  ポップする(出現直後に拡大→収束)スケール効果を持つ。
+### 7.5 HUD(`src/render/hud.ts`)
 
-### 7.5 モバイル向け HTML/CSS(`index.html`)
+HP/スタミナバー・WINS ピップ・中央メッセージ・「JUST!」ポップ・モード表示は、
+WebGL キャンバスの**上に重ねた HTML/CSS オーバーレイ**(`index.html` の `#hud` 要素)
+として実装する(`Hud` クラスが毎フレーム `update()` で各要素を更新)。
+
+- HP バーは内部に保持する「表示用 HP」を実値へ毎フレーム補間(lerp, `HP_LERP_RATE`)
+  させ、滑らかに減少させる。直前の減少分は「チップダメージ」として一時的に残し
+  フェードアウトする(この補間状態は描画専用で、ゲームロジック・決定性には影響しない)。
+- WINS はピップ(丸印)を `roundsWon` に応じて点灯。
+- 中央メッセージは `starting` 中は READY/FIGHT!、`roundOver`/`matchOver` 中は
+  ラウンド/マッチ結果(フェードイン)を表示する。
+- 「JUST!」テキストは `justTextAlpha` に応じてポップ(出現直後に拡大→収束)する
+  スケール効果を持つ。
+
+### 7.6 モバイル向け HTML/CSS(`index.html`)
 
 - ビューポートメタタグでピンチズーム/二重タップズームを無効化
   (`maximum-scale=1, user-scalable=no, viewport-fit=cover`)。
-- ゲームコンテナはビューポート全体に広がり、キャンバスは 800:450(16:9)の比率を
-  保ったまま `min(100vw, 100dvh * 16/9)` などで最大サイズにフィットする
+- ゲームコンテナはビューポート全体に広がり、キャンバスは 16:9 の比率を保ったまま
+  `min(100vw, 100dvh * 16/9)` などで最大サイズにフィットする
   (モバイル Safari の `100vh` 問題を避けるため `dvh` を使用)。
-- タッチ操作 UI はキャンバスのビューポート要素に重ねて配置する。
+- HUD オーバーレイ・タッチ操作 UI はキャンバスのビューポート要素に重ねて配置する。
 - 画面が縦向きの小型タッチデバイスでは、横向きを促す案内オーバーレイを表示する
   (`(pointer: coarse) and (orientation: portrait)` で判定し、デスクトップの
   縦長ウィンドウでは表示しない)。
@@ -252,35 +311,38 @@ import されることは一切ない。`npm run sim` とエンジンのユニ�
 ## 8. 技術スタック
 
 - **TypeScript + Vite**(開発サーバ / ビルド)
-- **HTML5 Canvas** 描画(幾何図形ベース、軽量)
-- **Vitest** 単体テスト(コンバットロジック・タイミング窓)
+- **Three.js**(WebGL 3D 描画: カメラ・ライティング・アリーナ・キャラクター・パーティクル)
+- **HTML/CSS オーバーレイ HUD**(WebGL キャンバスの上に重ねる軽量 DOM)
+- **Vitest** 単体テスト(コンバットロジック・タイミング窓・入力)
 - **ESLint + Prettier** 静的解析 / 整形
 - **GitHub Actions** CI(install → lint → typecheck → test → build)
 
 ### アーキテクチャ方針
 
-ゲームロジック(純粋・テスト可能)を描画・入力から完全分離する。
+ゲームロジック(純粋・テスト可能・3D だが y を使わない x-z 平面上の演算)を
+描画・入力から完全分離する。
 
 ```
 src/
   engine/
-    types.ts       共有型・インターフェース(契約)
-    constants.ts   バランス数値(本書の値の単一の出典)
-    state.ts       GameState / PlayerState ファクトリ
-    combat.ts      攻撃・回避・ジャスト回避の解決(純粋関数)
-    engine.ts      1 tick を進める step 関数(純粋)
+    types.ts       共有型・インターフェース(契約)。Vec2{x,z} 座標系
+    constants.ts   バランス数値(本書の値の単一の出典)。ARENA/ATTACKS/DODGE 等
+    state.ts       GameState / PlayerState ファクトリ(初期配置・ロックオン初期向き)
+    combat.ts      攻撃・回避・ジャスト回避・扇形ヒット判定の解決(純粋関数)
+    engine.ts      1 tick を進める step 関数(純粋)。ロックオン更新・移動・拘束
   input/
-    input.ts       キーボード/仮想キー → InputState
-    touch.ts       タッチ操作 UI(Pointer Events → 仮想キー)
+    input.ts       キーボード/仮想キー/アナログスティック → InputState
+    touch.ts       タッチ操作 UI(左スティック+右ボタン、Pointer Events → 仮想入力)
   audio/
     audio.ts       Web Audio による効果音エンジン
   render/
-    renderer.ts    GameState → Canvas 描画
-    particles.ts   演出パーティクルシステム
+    renderer.ts    GameState → Three.js 3D 描画(カメラ・アリーナ・キャラ・テレグラフ)
+    particles.ts   3D 演出パーティクルシステム(THREE.Points)
+    hud.ts         GameState → HTML オーバーレイ HUD(HP/スタミナ/WINS/メッセージ)
   sim/
     bot.ts         スクリプト AI(aggressive / reactive / CPU 対戦用 cpuBot)
     simulate.ts    ヘッドレス対戦ランナー(バランス検証ツール)
-  main.ts          ブートストラップ(ループ・入力・描画・音声・パーティクルの結線)
+  main.ts          ブートストラップ(ループ・入力・描画・HUD・音声・パーティクルの結線)
 test/
   combat.test.ts
   engine.test.ts
@@ -288,10 +350,12 @@ test/
 ```
 
 - `engine` 配下はブラウザ API に依存しない純粋ロジック。`step(state, inputs) -> state`。
+  座標は `Vec2 {x, z}`(x-z 平面、y は描画専用)。`Math.sin/cos/atan2/hypot/sqrt` は使用可。
 - `constants.ts` が全バランス値の唯一の出典(本書と一致させる)。
-- `input/touch.ts`・`audio/audio.ts`・`render/particles.ts`・`render/renderer.ts` の視覚/音声強化は
-  `DOM`/`AudioContext`/`PointerEvent`/`Math.random` に依存するエンジン外レイヤーであり、
-  `engine`/`sim` から import されない(7 章参照)。
+- `input/touch.ts`・`audio/audio.ts`・`render/particles.ts`・`render/renderer.ts`・
+  `render/hud.ts` の視覚/音声強化は `DOM`/`AudioContext`/`PointerEvent`/`Math.random`/
+  Three.js に依存するエンジン外レイヤーであり、`engine`/`sim` から import されない
+  (7 章参照)。
 
 ---
 

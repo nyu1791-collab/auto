@@ -1,9 +1,11 @@
 /**
  * タッチデバイス向けの画面操作 UI。
  *
- * Pointer Events を使い、DOM 上に配置したボタンを `InputManager.pressVirtual` /
- * `releaseVirtual` に直結する。キーボード入力と完全に同じ意味を持つ「仮想キー」
- * として扱われるため、エンジン側(`src/engine/**`, `src/sim/**`)には一切影響しない。
+ * 画面を左右に分割し、左半分=バーチャルアナログスティック(移動)、
+ * 右半分=アクションボタン(回避/弱/強)とする。Pointer Events を使い、
+ * `InputManager.setStick` / `pressVirtual` / `releaseVirtual` に直結する。
+ * いずれもキーボード入力と同じ意味を持つ「仮想入力」として扱われるため、
+ * エンジン側(`src/engine/**`, `src/sim/**`)には一切影響しない。
  *
  * このモジュールは `PointerEvent` や DOM API に依存するため、
  * `src/engine/**` や `src/sim/**` からは絶対に import しないこと。
@@ -22,20 +24,18 @@ interface ButtonSpec {
   momentary?: boolean;
 }
 
-const P1_BUTTONS: ButtonSpec[] = [
-  { label: '◀', key: 'a', className: 'tc-left' },
-  { label: '▶', key: 'd', className: 'tc-right' },
-  { label: '回避', key: 'w', className: 'tc-dodge' },
+/** P1 のアクションボタン(回避/弱/強) */
+const P1_ACTION_BUTTONS: ButtonSpec[] = [
   { label: '弱', key: 'f', className: 'tc-light' },
   { label: '強', key: 'g', className: 'tc-heavy' },
+  { label: '回避', key: 'shift', className: 'tc-dodge' },
 ];
 
-const P2_BUTTONS: ButtonSpec[] = [
-  { label: '◀', key: 'arrowleft', className: 'tc-left' },
-  { label: '▶', key: 'arrowright', className: 'tc-right' },
-  { label: '回避', key: 'arrowup', className: 'tc-dodge' },
+/** P2 のアクションボタン(回避/弱/強) */
+const P2_ACTION_BUTTONS: ButtonSpec[] = [
   { label: '弱', key: 'k', className: 'tc-light' },
   { label: '強', key: 'l', className: 'tc-heavy' },
+  { label: '回避', key: '/', className: 'tc-dodge' },
 ];
 
 const MENU_BUTTONS: ButtonSpec[] = [
@@ -53,11 +53,98 @@ export function isTouchDevice(): boolean {
 }
 
 /**
- * 画面上の操作ボタン群。P1 クラスタは常時表示、P2 クラスタは
- * `setTwoPlayer(true)` のときのみ表示する(タブレット対面プレイ用)。
+ * バーチャルアナログスティック。ベース円内をドラッグすると、中心からの相対
+ * ベクトルを `{forward, strafe}`(画面上方向 = forward+)に変換して
+ * `InputManager.setStick` を呼び出す。離すと (0,0) に戻る。
+ */
+class VirtualStick {
+  readonly root: HTMLDivElement;
+  private base: HTMLDivElement;
+  private knob: HTMLDivElement;
+  private pointerId: number | null = null;
+  /** ベースの半径(px)。スティックの可動範囲 */
+  private radius = 0;
+
+  constructor(
+    private input: InputManager,
+    private player: 0 | 1,
+    className: string
+  ) {
+    this.root = document.createElement('div');
+    this.root.className = `tc-stick-zone ${className}`;
+
+    this.base = document.createElement('div');
+    this.base.className = 'tc-stick-base';
+
+    this.knob = document.createElement('div');
+    this.knob.className = 'tc-stick-knob';
+    this.base.appendChild(this.knob);
+    this.root.appendChild(this.base);
+
+    this.root.style.touchAction = 'none';
+    this.root.addEventListener('pointerdown', (e) => this.onPointerDown(e));
+    this.root.addEventListener('pointermove', (e) => this.onPointerMove(e));
+    this.root.addEventListener('pointerup', (e) => this.onPointerUp(e));
+    this.root.addEventListener('pointercancel', (e) => this.onPointerUp(e));
+    this.root.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
+  private onPointerDown(e: PointerEvent): void {
+    if (this.pointerId !== null) return;
+    e.preventDefault();
+    this.pointerId = e.pointerId;
+    this.root.setPointerCapture(e.pointerId);
+    this.base.classList.add('tc-stick-active');
+    this.updateFromEvent(e);
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    if (this.pointerId !== e.pointerId) return;
+    e.preventDefault();
+    this.updateFromEvent(e);
+  }
+
+  private onPointerUp(e: PointerEvent): void {
+    if (this.pointerId !== e.pointerId) return;
+    e.preventDefault();
+    this.pointerId = null;
+    this.base.classList.remove('tc-stick-active');
+    this.knob.style.transform = 'translate(-50%, -50%)';
+    this.input.setStick(this.player, 0, 0);
+  }
+
+  private updateFromEvent(e: PointerEvent): void {
+    const rect = this.base.getBoundingClientRect();
+    this.radius = rect.width / 2;
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+
+    let dx = e.clientX - cx;
+    let dy = e.clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > this.radius) {
+      dx = (dx / dist) * this.radius;
+      dy = (dy / dist) * this.radius;
+    }
+
+    this.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+
+    // 画面上方向(dy が負)= forward +。dx 正 = strafe +。
+    const forward = this.radius > 0 ? -dy / this.radius : 0;
+    const strafe = this.radius > 0 ? dx / this.radius : 0;
+    this.input.setStick(this.player, forward, strafe);
+  }
+}
+
+/**
+ * 画面上の操作 UI。左半分=バーチャルスティック(P1)、右半分=アクションボタン(P1)。
+ * `setTwoPlayer(true)` で、対面プレイ用に P2 用のスティック+ボタンを画面反対側に表示する
+ * (上側を180°反転したレイアウト)。
  */
 export class TouchControls {
   readonly root: HTMLDivElement;
+  private p1Stick: VirtualStick;
+  private p2Stick: VirtualStick;
   private p2Cluster: HTMLDivElement;
 
   constructor(
@@ -68,12 +155,25 @@ export class TouchControls {
     this.root.className = 'touch-controls';
 
     const menuRow = this.buildCluster(MENU_BUTTONS, 'tc-menu-row');
-    const p1Cluster = this.buildCluster(P1_BUTTONS, 'tc-cluster tc-p1');
-    this.p2Cluster = this.buildCluster(P2_BUTTONS, 'tc-cluster tc-p2');
-    this.p2Cluster.classList.add('tc-hidden');
+
+    // --- P1(1P側、画面下): 左=スティック、右=アクションボタン ---
+    const p1Layer = document.createElement('div');
+    p1Layer.className = 'tc-layer tc-p1-layer';
+    this.p1Stick = new VirtualStick(this.input, 0, 'tc-p1-stick');
+    const p1Actions = this.buildCluster(P1_ACTION_BUTTONS, 'tc-actions tc-p1-actions');
+    p1Layer.appendChild(this.p1Stick.root);
+    p1Layer.appendChild(p1Actions);
+
+    // --- P2(対面プレイ、画面上): 180°反転配置。右=スティック、左=アクションボタン ---
+    this.p2Cluster = document.createElement('div');
+    this.p2Cluster.className = 'tc-layer tc-p2-layer tc-hidden';
+    this.p2Stick = new VirtualStick(this.input, 1, 'tc-p2-stick');
+    const p2Actions = this.buildCluster(P2_ACTION_BUTTONS, 'tc-actions tc-p2-actions');
+    this.p2Cluster.appendChild(this.p2Stick.root);
+    this.p2Cluster.appendChild(p2Actions);
 
     this.root.appendChild(menuRow);
-    this.root.appendChild(p1Cluster);
+    this.root.appendChild(p1Layer);
     this.root.appendChild(this.p2Cluster);
 
     if (isTouchDevice()) {
@@ -83,9 +183,18 @@ export class TouchControls {
     container.appendChild(this.root);
   }
 
-  /** VS PLAYER (2P) モードかどうかに応じて P2 クラスタの表示を切り替える */
+  /**
+   * VS PLAYER (2P) モードかどうかに応じて P2 クラスタの表示を切り替える。
+   * 無効化時は P2 のスティック/ボタンをニュートラルに戻す。
+   */
   setTwoPlayer(enabled: boolean): void {
     this.p2Cluster.classList.toggle('tc-hidden', !enabled);
+    if (!enabled) {
+      this.input.setStick(1, 0, 0);
+      for (const spec of P2_ACTION_BUTTONS) {
+        this.input.releaseVirtual(spec.key);
+      }
+    }
   }
 
   private buildCluster(buttons: ButtonSpec[], className: string): HTMLDivElement {
