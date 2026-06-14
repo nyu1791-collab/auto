@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolveAttackTick } from '../src/engine/combat';
-import { ATTACKS, JUMP, JUST, PLAYER } from '../src/engine/constants';
+import { ATTACKS, DODGE, JUMP, JUST, PLAYER } from '../src/engine/constants';
 import type { PlayerState } from '../src/engine/types';
 
 function makePlayer(overrides: Partial<PlayerState> = {}): PlayerState {
@@ -120,7 +120,7 @@ describe('resolveAttackTick', () => {
     });
     const defender = makePlayer({
       x: 10,
-      dodge: { elapsed: 11, startedAtTick: 0 },
+      dodge: { elapsed: DODGE.iframes, startedAtTick: 0 }, // i-frame 終了直後(elapsed >= iframes)
     });
 
     const outcome = resolveAttackTick(attacker, defender, 100);

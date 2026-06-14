@@ -64,8 +64,13 @@ export const ATTACKS: Record<'light' | 'heavy', AttackSpec> = {
 } as const;
 
 export const DODGE = {
-  /** 開始からの無敵フレーム数 */
-  iframes: 11,
+  /**
+   * 開始からの無敵フレーム数。`JUST.window`(11)より大きく取り、
+   * 「window いっぱい(11 tick 前)に出した回避」が active 到達時(elapsed=11)も
+   * まだ無敵(11 < iframes)であるようにして、広げた報酬窓を最後まで使えるようにする。
+   * 副次的に、やや早い/遅い回避でもダメージ無効になりやすく、易化にも効く。
+   */
+  iframes: 13,
   /** 回避アクション総持続 */
   duration: 18,
   /** 持続終了後のクールダウン */
