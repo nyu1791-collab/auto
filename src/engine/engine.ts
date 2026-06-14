@@ -85,21 +85,17 @@ export function step(state: GameState, inputs: Inputs): GameState {
     } else if (input.dodge && p.dodgeCooldown === 0 && p.stamina >= DODGE.staminaCost) {
       p.stamina -= DODGE.staminaCost;
 
-      const facingVec = { x: Math.cos(p.facing), z: Math.sin(p.facing) };
-      const rightVec = { x: Math.sin(p.facing), z: -Math.cos(p.facing) };
-      const moveX = input.move.forward * facingVec.x + input.move.strafe * rightVec.x;
-      const moveZ = input.move.forward * facingVec.z + input.move.strafe * rightVec.z;
-      const moveMag = Math.hypot(moveX, moveZ);
-
+      // 回避ダッシュ方向: 移動入力があればその方向(ワールド相対)、
+      // 無ければ相手と反対方向(バックステップ)へ。
+      const moveMag = Math.hypot(input.move.x, input.move.z);
       let dirX: number;
       let dirZ: number;
       if (moveMag > MOVE_EPSILON) {
-        dirX = moveX / moveMag;
-        dirZ = moveZ / moveMag;
+        dirX = input.move.x / moveMag;
+        dirZ = input.move.z / moveMag;
       } else {
-        // 入力が無ければ相手と反対方向(バックステップ)
-        dirX = -facingVec.x;
-        dirZ = -facingVec.z;
+        dirX = -Math.cos(p.facing);
+        dirZ = -Math.sin(p.facing);
       }
 
       p.dodge = { elapsed: 0, startedAtTick: state.tick, dirX, dirZ };
@@ -131,7 +127,7 @@ export function step(state: GameState, inputs: Inputs): GameState {
     }
   }
 
-  // 移動: 回避 i-frame 中は決定済みのダッシュ方向へ、それ以外はロックオン相対の通常移動
+  // 移動: 回避 i-frame 中は決定済みのダッシュ方向へ、それ以外は画面(ワールド)相対の通常移動
   for (let i = 0; i < 2; i++) {
     const p = players[i];
     const input = inputs[i];
@@ -145,10 +141,9 @@ export function step(state: GameState, inputs: Inputs): GameState {
     }
     if (p.attack || p.dodge || p.stunTicks > 0) continue;
 
-    const facingVec = { x: Math.cos(p.facing), z: Math.sin(p.facing) };
-    const rightVec = { x: Math.sin(p.facing), z: -Math.cos(p.facing) };
-    let dx = input.move.forward * facingVec.x + input.move.strafe * rightVec.x;
-    let dz = input.move.forward * facingVec.z + input.move.strafe * rightVec.z;
+    // 移動は画面(ワールド)相対。ロックオン(facing)は移動には影響しない。
+    let dx = input.move.x;
+    let dz = input.move.z;
     const mag = Math.hypot(dx, dz);
     if (mag > 1) {
       dx /= mag;

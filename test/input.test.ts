@@ -23,8 +23,8 @@ describe('InputManager virtual keys', () => {
     expect(input.wasJustPressed('a')).toBe(true);
 
     const inputs = input.poll();
-    // P1 の strafe-キー('a')が押されているので strafe = -1
-    expect(inputs[0].move).toEqual({ forward: 0, strafe: -1 });
+    // P1 の左キー('a')が押されているのでワールド -x へ移動
+    expect(inputs[0].move).toEqual({ x: -1, z: 0 });
   });
 
   it('held key continues to register movement across polls until released', () => {
@@ -32,23 +32,23 @@ describe('InputManager virtual keys', () => {
 
     input.pressVirtual('d');
     let inputs = input.poll();
-    expect(inputs[0].move).toEqual({ forward: 0, strafe: 1 });
+    expect(inputs[0].move).toEqual({ x: 1, z: 0 });
 
     // 2 tick 目: justPressed は消費済みだが pressed は維持されるため move は継続する
     inputs = input.poll();
-    expect(inputs[0].move).toEqual({ forward: 0, strafe: 1 });
+    expect(inputs[0].move).toEqual({ x: 1, z: 0 });
 
     input.releaseVirtual('d');
     inputs = input.poll();
-    expect(inputs[0].move).toEqual({ forward: 0, strafe: 0 });
+    expect(inputs[0].move).toEqual({ x: 0, z: 0 });
   });
 
-  it('forward key (w) moves forward (approach the opponent)', () => {
+  it('up key (w) moves into the screen (world -z)', () => {
     const input = new InputManager(fakeWindow());
 
     input.pressVirtual('w');
     const inputs = input.poll();
-    expect(inputs[0].move).toEqual({ forward: 1, strafe: 0 });
+    expect(inputs[0].move).toEqual({ x: 0, z: -1 });
   });
 
   it('same-tick press then release (tap) still registers as justPressed', () => {
@@ -88,10 +88,10 @@ describe('InputManager virtual keys', () => {
     input.releaseVirtual('l');
 
     const inputs = input.poll();
-    expect(inputs[1].move).toEqual({ forward: 0, strafe: 1 });
+    expect(inputs[1].move).toEqual({ x: 1, z: 0 });
     expect(inputs[1].attack).toBe('heavy');
     // P1 側には影響しない
-    expect(inputs[0].move).toEqual({ forward: 0, strafe: 0 });
+    expect(inputs[0].move).toEqual({ x: 0, z: 0 });
     expect(inputs[0].attack).toBeNull();
   });
 
@@ -106,33 +106,34 @@ describe('InputManager virtual keys', () => {
     expect(inputs[0].dodge).toBe(false);
   });
 
-  it('multi-touch: holding strafe while tapping dodge works independently', () => {
+  it('multi-touch: holding a movement key while tapping dodge works independently', () => {
     const input = new InputManager(fakeWindow());
 
-    // ◀(strafe-)を押し続けながら DODGE をタップする(マルチタッチのシミュレーション)
+    // ◀(左移動)を押し続けながら DODGE をタップする(マルチタッチのシミュレーション)
     input.pressVirtual('a');
     input.pressVirtual('shift');
     input.releaseVirtual('shift');
 
     const inputs = input.poll();
-    expect(inputs[0].move).toEqual({ forward: 0, strafe: -1 });
+    expect(inputs[0].move).toEqual({ x: -1, z: 0 });
     expect(inputs[0].dodge).toBe(true);
 
     // ◀ は離していないので、次 tick も move は継続する
     const next = input.poll();
-    expect(next[0].move).toEqual({ forward: 0, strafe: -1 });
+    expect(next[0].move).toEqual({ x: -1, z: 0 });
     expect(next[0].dodge).toBe(false);
   });
 });
 
 describe('InputManager analog stick', () => {
-  it('setStick feeds analog values that combine with keyboard input', () => {
+  it('setStick converts screen vector to world move (up = -z)', () => {
     const input = new InputManager(fakeWindow());
 
+    // 画面右 0.5 / 画面上 -0.5 → world {x: 0.5, z: 0.5}
     input.setStick(0, 0.5, -0.5);
     const inputs = input.poll();
-    expect(inputs[0].move.forward).toBeCloseTo(0.5);
-    expect(inputs[0].move.strafe).toBeCloseTo(-0.5);
+    expect(inputs[0].move.x).toBeCloseTo(0.5);
+    expect(inputs[0].move.z).toBeCloseTo(0.5);
   });
 
   it('stick values persist across polls until explicitly changed', () => {
@@ -141,31 +142,31 @@ describe('InputManager analog stick', () => {
     input.setStick(0, 1, 0);
     input.poll();
     const next = input.poll();
-    expect(next[0].move).toEqual({ forward: 1, strafe: 0 });
+    expect(next[0].move).toEqual({ x: 1, z: 0 });
 
     input.setStick(0, 0, 0);
     const after = input.poll();
-    expect(after[0].move).toEqual({ forward: 0, strafe: 0 });
+    expect(after[0].move).toEqual({ x: 0, z: 0 });
   });
 
   it('clamps combined keyboard + stick input to unit length', () => {
     const input = new InputManager(fakeWindow());
 
-    input.pressVirtual('w'); // forward += 1
-    input.setStick(0, 1, 0); // forward += 1 -> total 2, should clamp to 1
+    input.pressVirtual('w'); // z -= 1 (奥)
+    input.setStick(0, 0, 1); // screenY=1 → z -= 1 -> 合計 z = -2, 単位長へクランプ
 
     const inputs = input.poll();
-    expect(Math.hypot(inputs[0].move.forward, inputs[0].move.strafe)).toBeCloseTo(1);
+    expect(Math.hypot(inputs[0].move.x, inputs[0].move.z)).toBeCloseTo(1);
   });
 
   it('P1 and P2 sticks are independent', () => {
     const input = new InputManager(fakeWindow());
 
-    input.setStick(0, 1, 0);
-    input.setStick(1, 0, 1);
+    input.setStick(0, 1, 0); // world {x:1, z:0}
+    input.setStick(1, 0, 1); // world {x:0, z:-1}
 
     const inputs = input.poll();
-    expect(inputs[0].move).toEqual({ forward: 1, strafe: 0 });
-    expect(inputs[1].move).toEqual({ forward: 0, strafe: 1 });
+    expect(inputs[0].move).toEqual({ x: 1, z: 0 });
+    expect(inputs[1].move).toEqual({ x: 0, z: -1 });
   });
 });

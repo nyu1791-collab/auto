@@ -1,25 +1,25 @@
 import type { AttackKind, Inputs, PlayerInput } from '../engine/types';
 
 interface KeyMap {
-  /** forward + (相手へ接近) */
-  forwardPos: string;
-  /** forward - (相手から後退) */
-  forwardNeg: string;
-  /** strafe - (rightVec の逆方向) */
-  strafeNeg: string;
-  /** strafe + (rightVec 方向) */
-  strafePos: string;
+  /** 画面右 (ワールド +x) */
+  right: string;
+  /** 画面左 (ワールド -x) */
+  left: string;
+  /** 画面奥 (ワールド -z) */
+  up: string;
+  /** 画面手前 (ワールド +z) */
+  down: string;
   dodge: string;
   light: string;
   heavy: string;
 }
 
-// P1: WASD 移動(W=前進/接近, S=後退, A=左ストレイフ, D=右ストレイフ)、Shift 回避、F/G 攻撃
+// P1: WASD 移動(W=奥, S=手前, A=左, D=右)、Shift 回避、F/G 攻撃
 const P1_KEYS: KeyMap = {
-  forwardPos: 'w',
-  forwardNeg: 's',
-  strafeNeg: 'a',
-  strafePos: 'd',
+  right: 'd',
+  left: 'a',
+  up: 'w',
+  down: 's',
   dodge: 'shift',
   light: 'f',
   heavy: 'g',
@@ -27,19 +27,19 @@ const P1_KEYS: KeyMap = {
 
 // P2: 矢印キー移動、'/' 回避、K/L 攻撃
 const P2_KEYS: KeyMap = {
-  forwardPos: 'arrowup',
-  forwardNeg: 'arrowdown',
-  strafeNeg: 'arrowleft',
-  strafePos: 'arrowright',
+  right: 'arrowright',
+  left: 'arrowleft',
+  up: 'arrowup',
+  down: 'arrowdown',
   dodge: '/',
   light: 'k',
   heavy: 'l',
 };
 
-/** アナログスティック入力(setStick で外部から設定される) */
+/** アナログスティック入力(setStick で外部から設定される。ワールド相対の {x,z}) */
 interface StickState {
-  forward: number;
-  strafe: number;
+  x: number;
+  z: number;
 }
 
 /** キーボード入力を保持し、tick ごとに PlayerInput へ変換する */
@@ -49,8 +49,8 @@ export class InputManager {
 
   /** タッチUI等から設定されるアナログスティック値(プレイヤーごと)。明示的に変わるまで保持される */
   private sticks: [StickState, StickState] = [
-    { forward: 0, strafe: 0 },
-    { forward: 0, strafe: 0 },
+    { x: 0, z: 0 },
+    { x: 0, z: 0 },
   ];
 
   constructor(target: Pick<Window, 'addEventListener'>) {
@@ -107,32 +107,34 @@ export class InputManager {
 
   /**
    * アナログスティック値を設定する(タッチUIのバーチャルスティック用)。
-   * `forward`/`strafe` は概ね [-1, 1]。明示的に呼ばれるまで値は保持される
+   * 引数は画面ベクトル(`screenX` = 右 +, `screenY` = 上 +、各おおむね [-1, 1])。
+   * 内部ではワールド相対の移動ベクトル `{x: screenX, z: -screenY}` に変換して保持する
+   * (画面上 = 奥 = ワールド -z)。明示的に呼ばれるまで値は保持される
    * (離した際は (0,0) を渡すこと)。
    */
-  setStick(player: 0 | 1, forward: number, strafe: number): void {
-    this.sticks[player] = { forward, strafe };
+  setStick(player: 0 | 1, screenX: number, screenY: number): void {
+    this.sticks[player] = { x: screenX, z: -screenY };
   }
 
   private readPlayer(keys: KeyMap, player: 0 | 1): PlayerInput {
-    let forward = 0;
-    let strafe = 0;
-    if (this.pressed.has(keys.forwardPos)) forward += 1;
-    if (this.pressed.has(keys.forwardNeg)) forward -= 1;
-    if (this.pressed.has(keys.strafeNeg)) strafe -= 1;
-    if (this.pressed.has(keys.strafePos)) strafe += 1;
+    let x = 0;
+    let z = 0;
+    if (this.pressed.has(keys.right)) x += 1;
+    if (this.pressed.has(keys.left)) x -= 1;
+    if (this.pressed.has(keys.up)) z -= 1; // 画面奥 = ワールド -z
+    if (this.pressed.has(keys.down)) z += 1;
 
     // スティック入力をキーボード入力に合成する(スティックが非ゼロならその分を加算)。
     const stick = this.sticks[player];
-    forward += stick.forward;
-    strafe += stick.strafe;
+    x += stick.x;
+    z += stick.z;
 
     // 合成後に単位長へクランプ(engine 側でも行うが、ここで整えておくと
     // 入力値そのものが [-1,1] の範囲に収まり扱いやすい)。
-    const mag = Math.hypot(forward, strafe);
+    const mag = Math.hypot(x, z);
     if (mag > 1) {
-      forward /= mag;
-      strafe /= mag;
+      x /= mag;
+      z /= mag;
     }
 
     let attack: AttackKind | null = null;
@@ -140,7 +142,7 @@ export class InputManager {
     else if (this.justPressed.has(keys.heavy)) attack = 'heavy';
 
     return {
-      move: { forward, strafe },
+      move: { x, z },
       dodge: this.justPressed.has(keys.dodge),
       attack,
     };

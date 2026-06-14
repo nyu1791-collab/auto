@@ -16,11 +16,12 @@ export interface Vec2 {
 /** 1 プレイヤーの入力(この tick の意図) */
 export interface PlayerInput {
   /**
-   * ロックオン相対の移動入力(各おおむね [-1,1] のアナログ値)。
-   * `forward` + で相手に接近、- で後退。
-   * `strafe` + で `rightVec` 方向へサイドステップ周回。
+   * 画面(ワールド)相対の移動方向ベクトル(各おおむね [-1,1] のアナログ値)。
+   * `x` + で画面右(ワールド +x)、`z` - で画面奥(ワールド -z)へ移動する。
+   * エンジンが大きさを 1 にクランプして `moveSpeed` を掛ける。
+   * ロックオン(`facing`)は向き・攻撃方向にのみ使われ、移動方向には影響しない。
    */
-  move: { forward: number; strafe: number };
+  move: Vec2;
   /** 回避を開始しようとしているか(押した瞬間に true) */
   dodge: boolean;
   /** この tick に開始したい攻撃。なければ null */

@@ -4,7 +4,7 @@ import { ARENA, ATTACKS, DODGE, JUST, MATCH, PLAYER, TPS } from '../src/engine/c
 import { createInitialState } from '../src/engine/state';
 import type { GameState, Inputs, PlayerInput, PlayerState, Vec2 } from '../src/engine/types';
 
-const NO_INPUT: PlayerInput = { move: { forward: 0, strafe: 0 }, dodge: false, attack: null };
+const NO_INPUT: PlayerInput = { move: { x: 0, z: 0 }, dodge: false, attack: null };
 
 function makePlayer(id: 0 | 1, overrides: Partial<PlayerState> = {}): PlayerState {
   return {
@@ -66,32 +66,29 @@ describe('createInitialState', () => {
 });
 
 describe('movement', () => {
-  it('moves forward along facing toward the opponent', () => {
-    // P0 は +x 方向(facing=0)を向いている。forward=1 で接近(+x へ移動)
+  it('moves in world +x (screen right), independent of facing', () => {
     const state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
-    const next = step(state, inputs({ move: { forward: 1, strafe: 0 } }));
+    const next = step(state, inputs({ move: { x: 1, z: 0 } }));
     expect(next.players[0].pos.x).toBeCloseTo(-180 + PLAYER.moveSpeed);
     expect(next.players[0].pos.z).toBeCloseTo(0);
   });
 
-  it('moves backward away from the opponent with negative forward', () => {
+  it('moves in world -x with negative x input', () => {
     const state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
-    const next = step(state, inputs({ move: { forward: -1, strafe: 0 } }));
+    const next = step(state, inputs({ move: { x: -1, z: 0 } }));
     expect(next.players[0].pos.x).toBeCloseTo(-180 - PLAYER.moveSpeed);
   });
 
-  it('strafes along the right vector to side-step around the opponent', () => {
-    // facing=0 → facingVec=(1,0), rightVec=(sin(0), -cos(0)) = (0,-1)
-    // strafe=1 で rightVec 方向(-z)へ移動する
+  it('moves in world -z (into the screen) to side-step', () => {
     const state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
-    const next = step(state, inputs({ move: { forward: 0, strafe: 1 } }));
+    const next = step(state, inputs({ move: { x: 0, z: -1 } }));
     expect(next.players[0].pos.x).toBeCloseTo(-180);
     expect(next.players[0].pos.z).toBeCloseTo(0 - PLAYER.moveSpeed);
   });
 
-  it('normalizes diagonal forward+strafe input to unit length', () => {
+  it('normalizes diagonal input to unit length', () => {
     const state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
-    const next = step(state, inputs({ move: { forward: 1, strafe: 1 } }));
+    const next = step(state, inputs({ move: { x: 1, z: 1 } }));
     const dx = next.players[0].pos.x - -180;
     const dz = next.players[0].pos.z - 0;
     expect(Math.hypot(dx, dz)).toBeCloseTo(PLAYER.moveSpeed);
@@ -99,10 +96,10 @@ describe('movement', () => {
 
   it('clamps movement to the circular arena bounds', () => {
     const limit = ARENA.radius - ARENA.playerRadius;
-    // すでに境界上にいて、外側へ向かう forward 入力を与える
+    // すでに境界上にいて、外側(+x)へ向かう入力を与える
     const pos: Vec2 = { x: limit, z: 0 };
     const state = makeState({ pos, facing: 0 }, { pos: { x: -limit, z: 0 } });
-    const next = step(state, inputs({ move: { forward: 1, strafe: 0 } }));
+    const next = step(state, inputs({ move: { x: 1, z: 0 } }));
     const dist = Math.hypot(next.players[0].pos.x, next.players[0].pos.z);
     expect(dist).toBeLessThanOrEqual(limit + 1e-9);
   });
@@ -127,7 +124,7 @@ describe('attack lifecycle', () => {
     expect(state.players[0].attack).toEqual({ kind: 'light', elapsed: 1, hasHit: false, aimAngle: 0 });
 
     const posWhileAttacking = { ...state.players[0].pos };
-    state = step(state, inputs({ move: { forward: 1, strafe: 0 } }));
+    state = step(state, inputs({ move: { x: 1, z: 0 } }));
     expect(state.players[0].pos).toEqual(posWhileAttacking);
 
     const total = ATTACKS.light.windup + ATTACKS.light.active + ATTACKS.light.recovery;
@@ -154,9 +151,9 @@ describe('dodge', () => {
   });
 
   it('dashes in the direction of move input when given', () => {
-    // facing=0 → facingVec=(1,0), rightVec=(0,-1)。strafe=1 で rightVec 方向へダッシュ
+    // 移動入力 {x:0, z:-1}(画面奥)へダッシュする
     const state = makeState({ pos: { x: -180, z: 0 }, facing: 0 }, { pos: { x: 180, z: 0 } });
-    const next = step(state, inputs({ dodge: true, move: { forward: 0, strafe: 1 } }));
+    const next = step(state, inputs({ dodge: true, move: { x: 0, z: -1 } }));
 
     expect(next.players[0].dodge?.dirX).toBeCloseTo(0);
     expect(next.players[0].dodge?.dirZ).toBeCloseTo(-1);
@@ -242,14 +239,13 @@ describe('hit resolution', () => {
     );
     state = step(state, inputs({ attack: 'light' })); // step 1: aimAngle = 0 固定
 
-    // P1 は facing=π → facingVec=(-1,0), rightVec=(sin π, -cos π)=(0,1)
-    // strafe=1 で +z 方向へサイドステップし続ける
+    // P1 は +z 方向(画面手前)へサイドステップし続け、攻撃の扇(aimAngle=0)の外へ出る
     for (let i = 0; i < ATTACKS.light.windup - 1; i++) {
-      state = step(state, inputs({}, { move: { forward: 0, strafe: 1 } }));
+      state = step(state, inputs({}, { move: { x: 0, z: 1 } }));
     }
 
     const before = state.players[1].hp;
-    state = step(state, inputs({}, { move: { forward: 0, strafe: 1 } })); // first active step
+    state = step(state, inputs({}, { move: { x: 0, z: 1 } })); // first active step
     expect(state.players[1].hp).toBe(before); // arc 外で空振り
   });
 });
@@ -306,7 +302,7 @@ describe('starting phase', () => {
     expect(state.roundTick).toBe(0);
 
     const startPos = { ...state.players[0].pos };
-    state = step(state, inputs({ move: { forward: 1, strafe: 0 }, attack: 'light', dodge: true }));
+    state = step(state, inputs({ move: { x: 1, z: 0 }, attack: 'light', dodge: true }));
     expect(state.phase).toBe('starting');
     expect(state.phaseTimer).toBe(MATCH.startCountdownTicks - 1);
     expect(state.players[0].pos).toEqual(startPos);
@@ -357,7 +353,7 @@ describe('round and match progression', () => {
   it('ignores inputs while frozen on roundOver', () => {
     let state = landHit(lethalHitSetup(0, ATTACKS.light.damage));
     const before = { ...state.players[1].pos };
-    state = step(state, inputs({ move: { forward: 1, strafe: 0 } }, { move: { forward: -1, strafe: 0 } }));
+    state = step(state, inputs({ move: { x: 1, z: 0 } }, { move: { x: -1, z: 0 } }));
     expect(state.phase).toBe('roundOver');
     expect(state.phaseTimer).toBe(MATCH.roundEndFreezeTicks - 1);
     expect(state.players[1].pos).toEqual(before);
@@ -395,7 +391,7 @@ describe('round and match progression', () => {
     state = runRoundOver(state);
     expect(state.phase).toBe('matchOver');
 
-    const next = step(state, inputs({ move: { forward: 1, strafe: 0 } }));
+    const next = step(state, inputs({ move: { x: 1, z: 0 } }));
     expect(next).toEqual(state);
   });
 });

@@ -1,13 +1,15 @@
 /**
- * Three.js による 3D レンダラー。
+ * Three.js による 3D レンダラー(マインクラフト風)。
  *
- * 円形アリーナ・ロックオンで向き合う2キャラクター・攻撃テレグラフ(扇形)を
- * パースペクティブカメラで描画する。HUD(HP/スタミナ/メッセージ等)は
- * `index.html` の HTML オーバーレイ側で更新する(本クラスは 3D シーンと
- * 全画面フラッシュのみを担当)。
+ * - ボクセル(ブロック)人型キャラクター(頭・胴・腕・脚)に歩行/攻撃アニメーション。
+ * - 草・土のブロック地面 + 青空 + 太陽光 + ソフトシャドウ。
+ * - 攻撃テレグラフ(地面の扇形)で、ジャスト回避とサイドステップの読み合いを可視化。
  *
- * このモジュールは `THREE`/DOM に依存するため、`src/engine/**` や
- * `src/sim/**` からは絶対に import しないこと。
+ * カメラは「+Z 側からアリーナ中心(-Z 方向)を見下ろす固定アングル」で、
+ * Y 軸回転はしない。これにより「画面上 = ワールド -z / 画面右 = ワールド +x」が
+ * 常に成立し、入力(画面相対の move)と見た目が一致する。
+ *
+ * DOM / WebGL に依存するため、`src/engine/**`・`src/sim/**` からは import しないこと。
  */
 
 import * as THREE from 'three';
@@ -15,95 +17,113 @@ import { ARENA, ATTACKS, DODGE } from '../engine/constants';
 import type { GameState, PlayerState } from '../engine/types';
 import type { ParticleSystem } from './particles';
 
-const COLORS = {
-  p0: 0x4da6ff,
-  p0Glow: 0x4da6ff,
-  p1: 0xff5d5d,
-  p1Glow: 0xff5d5d,
-  stunned: 0xffffff,
-  arenaFloor: 0x2a2f37,
-  arenaLine: 0x3a4250,
-  arenaRing: 0x5a6478,
-  telegraphLight: 0xffe066,
-  telegraphHeavy: 0xff463c,
-};
-
 /**
  * main.ts のエフェクトレイヤーから渡される、tick 間の一時的な見た目情報。
  * エンジン状態には含まれない(エンジンの純粋性を保つ)。
  */
 export interface RenderEffects {
-  /** 画面シェイクのオフセット(ワールド単位) */
+  /** カメラシェイクのオフセット(ワールド単位) */
   shakeX?: number;
   shakeY?: number;
-  /** 全体フラッシュの強さ (0-1)。ジャスト回避時の白フラッシュなど */
+  /** 全体フラッシュの強さ (0-1) */
   flashAlpha?: number;
-  /** 「JUST!」テキストの表示強度 (0-1)。0 なら非表示。HUD 側で使用する */
+  /** 「JUST!」テキストの表示強度 (0-1)。HUD 側で使用 */
   justTextAlpha?: number;
-  /** 現在のモード表示("VS CPU" / "VS PLAYER")。HUD 側で使用する */
+  /** 現在のモード表示 */
   modeLabel?: string;
 }
 
-/** GameState を Three.js シーンに描画する */
+const COLORS = {
+  // チーム色(シャツ)
+  p0Shirt: 0x3aa0ff,
+  p0Pants: 0x274690,
+  p1Shirt: 0xff5a5a,
+  p1Pants: 0x8a2f2f,
+  skin: 0xd9a06a,
+  hair: 0x5a3a22,
+  eyeWhite: 0xf5f5f5,
+  eyePupil: 0x3a2a6a,
+  // 地面
+  grassTop: 0x6abe4f,
+  grassTop2: 0x5aae42,
+  dirt: 0x80592f,
+  dirt2: 0x6f4c27,
+  stone: 0x9098a0,
+  trunk: 0x6b4a2b,
+  leaves: 0x4f9d3a,
+  // 演出
+  telegraphLight: 0xffe066,
+  telegraphHeavy: 0xff5030,
+  sky: 0x8fc6ff,
+  stunned: 0xffffff,
+};
+
+/** ボクセル人型 1 体分のメッシュ・ピボット・アニメーション状態 */
+interface CharacterRig {
+  group: THREE.Group;
+  /** 脚・腕のスイング用ピボット */
+  legL: THREE.Group;
+  legR: THREE.Group;
+  armL: THREE.Group;
+  armR: THREE.Group;
+  /** 色替え・透明化の対象となる全メッシュ */
+  meshes: THREE.Mesh[];
+  /** 攻撃時に発光させる胴・腕のマテリアル */
+  shirtMats: THREE.MeshStandardMaterial[];
+  shirtColor: number;
+  /** 歩行アニメーションの位相と振幅 */
+  walkPhase: number;
+  swingAmp: number;
+  /** 直前フレームのワールド位置(移動量=歩行速度の算出用) */
+  lastX: number;
+  lastZ: number;
+  afterimages: THREE.Mesh[];
+}
+
+/** 1 ブロック分のワールドサイズ係数 */
+const U = 1.7;
+
+/** GameState を 3D 描画するレンダラー */
 export class Renderer {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
 
-  private p0Group: THREE.Group;
-  private p1Group: THREE.Group;
-  private p0Body: THREE.Mesh;
-  private p1Body: THREE.Mesh;
-  private p0Visor: THREE.Mesh;
-  private p1Visor: THREE.Mesh;
-  private p0Glow: THREE.Mesh;
-  private p1Glow: THREE.Mesh;
-  private p0Afterimages: THREE.Mesh[] = [];
-  private p1Afterimages: THREE.Mesh[] = [];
+  private p0: CharacterRig;
+  private p1: CharacterRig;
 
   private telegraphP0: THREE.Mesh;
   private telegraphP1: THREE.Mesh;
 
   private flashOverlay: HTMLDivElement;
 
-  /** カメラの現在の注視点(滑らかに追従させるための内部状態) */
   private lookTarget = new THREE.Vector3(0, 0, 0);
-  /** カメラの現在の距離(ズーム。滑らかに追従) */
   private camDistance = 520;
-
-  /** 点滅(stun表現)用の時間累積(ms) */
   private time = 0;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0c0e13);
-    this.scene.fog = new THREE.Fog(0x0c0e13, 500, 1400);
+    this.scene.background = new THREE.Color(COLORS.sky);
+    this.scene.fog = new THREE.Fog(COLORS.sky, 900, 2400);
 
-    this.camera = new THREE.PerspectiveCamera(45, 16 / 9, 1, 4000);
+    this.camera = new THREE.PerspectiveCamera(45, 16 / 9, 1, 5000);
 
     this.setupLights();
-    this.buildArena();
+    this.buildWorld();
 
-    const p0 = this.buildCharacter(COLORS.p0, COLORS.p0Glow);
-    const p1 = this.buildCharacter(COLORS.p1, COLORS.p1Glow);
-    this.p0Group = p0.group;
-    this.p1Group = p1.group;
-    this.p0Body = p0.body;
-    this.p1Body = p1.body;
-    this.p0Visor = p0.visor;
-    this.p1Visor = p1.visor;
-    this.p0Glow = p0.glow;
-    this.p1Glow = p1.glow;
-    this.scene.add(this.p0Group, this.p1Group);
+    this.p0 = this.buildCharacter(0);
+    this.p1 = this.buildCharacter(1);
+    this.scene.add(this.p0.group, this.p1.group);
 
     this.telegraphP0 = this.buildTelegraph();
     this.telegraphP1 = this.buildTelegraph();
     this.scene.add(this.telegraphP0, this.telegraphP1);
 
-    // 全画面フラッシュ用の HTML オーバーレイ(WebGL キャンバスの上に重ねる)
     this.flashOverlay = document.createElement('div');
     this.flashOverlay.style.position = 'absolute';
     this.flashOverlay.style.inset = '0';
@@ -121,7 +141,6 @@ export class Renderer {
     this.scene.add(particles.object3D);
   }
 
-  /** キャンバスのリサイズに合わせてカメラの aspect を更新する */
   handleResize(): void {
     const { clientWidth, clientHeight } = this.canvas;
     const width = Math.max(1, clientWidth);
@@ -131,7 +150,6 @@ export class Renderer {
     this.camera.updateProjectionMatrix();
   }
 
-  /** 破棄。WebGL コンテキストとオーバーレイ要素を解放する */
   dispose(): void {
     this.renderer.dispose();
     this.flashOverlay.remove();
@@ -140,18 +158,14 @@ export class Renderer {
   render(state: GameState, effects: RenderEffects = {}, dtMs = 16.7): void {
     this.time += dtMs;
 
-    this.updateArenaPulse();
-    this.updateCharacter(this.p0Group, this.p0Body, this.p0Visor, this.p0Glow, this.p0Afterimages, state.players[0], COLORS.p0);
-    this.updateCharacter(this.p1Group, this.p1Body, this.p1Visor, this.p1Glow, this.p1Afterimages, state.players[1], COLORS.p1);
-    this.updateTelegraphs(state.players[0], state.players[1]);
-
+    this.updateCharacter(this.p0, state.players[0]);
+    this.updateCharacter(this.p1, state.players[1]);
+    this.updateTelegraph(this.telegraphP0, state.players[0]);
+    this.updateTelegraph(this.telegraphP1, state.players[1]);
     this.updateCamera(state, effects);
 
-    if (effects.flashAlpha !== undefined && effects.flashAlpha > 0) {
-      this.flashOverlay.style.opacity = String(Math.min(1, effects.flashAlpha));
-    } else {
-      this.flashOverlay.style.opacity = '0';
-    }
+    this.flashOverlay.style.opacity =
+      effects.flashAlpha && effects.flashAlpha > 0 ? String(Math.min(1, effects.flashAlpha)) : '0';
 
     this.renderer.render(this.scene, this.camera);
   }
@@ -159,260 +173,332 @@ export class Renderer {
   // --- ライティング ------------------------------------------------------
 
   private setupLights(): void {
-    const ambient = new THREE.AmbientLight(0x8090a0, 0.7);
-    this.scene.add(ambient);
+    // 空と地面からの環境光(屋外らしい柔らかさ)
+    const hemi = new THREE.HemisphereLight(0xbfe3ff, 0x4a7a3a, 0.85);
+    this.scene.add(hemi);
 
-    const sun = new THREE.DirectionalLight(0xffffff, 1.1);
-    sun.position.set(180, 420, 240);
+    // 太陽(暖色の方向光 + 影)
+    const sun = new THREE.DirectionalLight(0xfff2d6, 1.15);
+    sun.position.set(280, 520, 200);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
+    sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.near = 10;
-    sun.shadow.camera.far = 1200;
-    sun.shadow.camera.left = -ARENA.radius - 50;
-    sun.shadow.camera.right = ARENA.radius + 50;
-    sun.shadow.camera.top = ARENA.radius + 50;
-    sun.shadow.camera.bottom = -ARENA.radius - 50;
+    sun.shadow.camera.far = 1600;
+    const s = ARENA.radius + 120;
+    sun.shadow.camera.left = -s;
+    sun.shadow.camera.right = s;
+    sun.shadow.camera.top = s;
+    sun.shadow.camera.bottom = -s;
+    sun.shadow.bias = -0.0004;
     this.scene.add(sun);
-
-    const rim = new THREE.DirectionalLight(0x6688ff, 0.35);
-    rim.position.set(-260, 180, -300);
-    this.scene.add(rim);
   }
 
-  // --- アリーナ ------------------------------------------------------------
+  // --- ワールド(地面・装飾) ---------------------------------------------
 
-  private arenaGroup = new THREE.Group();
-  private ringMaterial!: THREE.LineBasicMaterial;
+  private buildWorld(): void {
+    // 草原(広い地面)
+    const grassTex = this.makeBlockTexture([COLORS.grassTop, COLORS.grassTop2], 0.5);
+    grassTex.repeat.set(60, 60);
+    const groundGeo = new THREE.PlaneGeometry(4000, 4000);
+    const groundMat = new THREE.MeshStandardMaterial({ map: grassTex, roughness: 1, metalness: 0 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    this.scene.add(ground);
 
-  private buildArena(): void {
-    // 床(円形)
-    const floorGeo = new THREE.CircleGeometry(ARENA.radius, 64);
-    const floorMat = new THREE.MeshStandardMaterial({
-      color: COLORS.arenaFloor,
-      roughness: 0.95,
-      metalness: 0.05,
-    });
-    const floor = new THREE.Mesh(floorGeo, floorMat);
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    this.arenaGroup.add(floor);
+    // アリーナ床(ごく薄い土の円盤を草原の上に乗せ、戦闘エリアを示す)
+    const padTex = this.makeBlockTexture([COLORS.dirt, COLORS.dirt2], 0.5);
+    padTex.repeat.set(10, 10);
+    const padGeo = new THREE.CylinderGeometry(ARENA.radius, ARENA.radius, 6, 56);
+    const padMat = new THREE.MeshStandardMaterial({ map: padTex, roughness: 1 });
+    const pad = new THREE.Mesh(padGeo, padMat);
+    pad.position.y = 3;
+    pad.receiveShadow = true;
+    this.scene.add(pad);
 
-    // 同心円のグリッドライン
-    this.ringMaterial = new THREE.LineBasicMaterial({ color: COLORS.arenaLine, transparent: true, opacity: 0.5 });
-    const ringCount = 4;
-    for (let i = 1; i <= ringCount; i++) {
-      const r = (ARENA.radius * i) / (ringCount + 1);
-      this.arenaGroup.add(this.buildRing(r, this.ringMaterial));
+    // 戦闘エリアの境界を示す石ブロックのリング
+    const stoneGeo = new THREE.BoxGeometry(22, 16, 22);
+    const stoneMat = new THREE.MeshStandardMaterial({ color: COLORS.stone, roughness: 1, flatShading: true });
+    const ringBlocks = 36;
+    for (let i = 0; i < ringBlocks; i++) {
+      const a = (i / ringBlocks) * Math.PI * 2;
+      const block = new THREE.Mesh(stoneGeo, stoneMat);
+      block.position.set(Math.cos(a) * ARENA.radius, 8, Math.sin(a) * ARENA.radius);
+      block.rotation.y = a;
+      block.castShadow = true;
+      block.receiveShadow = true;
+      this.scene.add(block);
     }
 
-    // 放射状の仕切り線
-    const spokeCount = 12;
-    for (let i = 0; i < spokeCount; i++) {
-      const angle = (i / spokeCount) * Math.PI * 2;
-      const points = [
-        new THREE.Vector3(0, 0.1, 0),
-        new THREE.Vector3(Math.cos(angle) * ARENA.radius, 0.1, Math.sin(angle) * ARENA.radius),
-      ];
-      const geo = new THREE.BufferGeometry().setFromPoints(points);
-      this.arenaGroup.add(new THREE.Line(geo, this.ringMaterial));
+    // 外周の装飾(木)を数本配置
+    const treeSpots: [number, number][] = [
+      [-1.9, 1.4],
+      [2.2, 0.6],
+      [-0.6, -2.3],
+      [1.4, -1.8],
+      [-2.4, -0.5],
+    ];
+    for (const [ax, az] of treeSpots) {
+      const r = ARENA.radius + 180 + Math.abs(ax * az) * 30;
+      this.scene.add(this.buildTree(ax * r * 0.4, az * r * 0.4));
     }
-
-    // 外周リング(発光)
-    const outerRingGeo = new THREE.RingGeometry(ARENA.radius - 4, ARENA.radius + 4, 64);
-    const outerRingMat = new THREE.MeshBasicMaterial({
-      color: COLORS.arenaRing,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.8,
-    });
-    const outerRing = new THREE.Mesh(outerRingGeo, outerRingMat);
-    outerRing.rotation.x = -Math.PI / 2;
-    outerRing.position.y = 0.2;
-    this.arenaGroup.add(outerRing);
-
-    // 背景に淡いグラデーション床(アリーナの外側)
-    const bgFloorGeo = new THREE.CircleGeometry(2000, 48);
-    const bgFloorMat = new THREE.MeshStandardMaterial({ color: 0x0c0e13, roughness: 1 });
-    const bgFloor = new THREE.Mesh(bgFloorGeo, bgFloorMat);
-    bgFloor.rotation.x = -Math.PI / 2;
-    bgFloor.position.y = -1;
-    this.arenaGroup.add(bgFloor);
-
-    this.scene.add(this.arenaGroup);
   }
 
-  private buildRing(radius: number, material: THREE.LineBasicMaterial): THREE.LineLoop {
-    const segments = 64;
-    const points: THREE.Vector3[] = [];
-    for (let i = 0; i <= segments; i++) {
-      const angle = (i / segments) * Math.PI * 2;
-      points.push(new THREE.Vector3(Math.cos(angle) * radius, 0.1, Math.sin(angle) * radius));
+  /** ブロック模様(2色のピクセル格子)の CanvasTexture を生成する */
+  private makeBlockTexture(colors: [number, number], variance: number): THREE.Texture {
+    const size = 64;
+    const cells = 8;
+    const cell = size / cells;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+    const c0 = new THREE.Color(colors[0]);
+    const c1 = new THREE.Color(colors[1]);
+    for (let y = 0; y < cells; y++) {
+      for (let x = 0; x < cells; x++) {
+        const t = Math.random() * variance;
+        const base = (x + y) % 2 === 0 ? c0 : c1;
+        const col = base.clone().offsetHSL(0, 0, (Math.random() - 0.5) * 0.06 - t * 0.04);
+        ctx.fillStyle = `#${col.getHexString()}`;
+        ctx.fillRect(x * cell, y * cell, cell, cell);
+      }
     }
-    const geo = new THREE.BufferGeometry().setFromPoints(points);
-    return new THREE.LineLoop(geo, material);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    return tex;
   }
 
-  /** アリーナのリング・グリッドをごく緩やかに明滅させる(演出のみ) */
-  private updateArenaPulse(): void {
-    const pulse = 0.4 + 0.15 * Math.sin(this.time / 1400);
-    this.ringMaterial.opacity = pulse;
+  private buildTree(x: number, z: number): THREE.Group {
+    const tree = new THREE.Group();
+    const trunkMat = new THREE.MeshStandardMaterial({ color: COLORS.trunk, roughness: 1, flatShading: true });
+    const leafMat = new THREE.MeshStandardMaterial({ color: COLORS.leaves, roughness: 1, flatShading: true });
+    const trunk = new THREE.Mesh(new THREE.BoxGeometry(16, 70, 16), trunkMat);
+    trunk.position.y = 35;
+    trunk.castShadow = true;
+    tree.add(trunk);
+    const leaves = new THREE.Mesh(new THREE.BoxGeometry(70, 56, 70), leafMat);
+    leaves.position.y = 92;
+    leaves.castShadow = true;
+    tree.add(leaves);
+    tree.position.set(x, 0, z);
+    return tree;
   }
 
   // --- キャラクター --------------------------------------------------------
 
-  /**
-   * カプセル状のボディ + 向きを示すバイザー(正面に取り付けた発光パネル)を持つ
-   * キャラクターを構築する。`group` の回転で facing を表現する。
-   */
-  private buildCharacter(
-    color: number,
-    glowColor: number
-  ): { group: THREE.Group; body: THREE.Mesh; visor: THREE.Mesh; glow: THREE.Mesh } {
+  private buildCharacter(id: 0 | 1): CharacterRig {
+    const shirtColor = id === 0 ? COLORS.p0Shirt : COLORS.p1Shirt;
+    const pantsColor = id === 0 ? COLORS.p0Pants : COLORS.p1Pants;
+
+    const legW = 4 * U;
+    const legH = 12 * U;
+    const legD = 4 * U;
+    const bodyW = 8 * U;
+    const bodyH = 12 * U;
+    const bodyD = 4 * U;
+    const armW = 4 * U;
+    const armH = 12 * U;
+    const head = 8 * U;
+
     const group = new THREE.Group();
+    const meshes: THREE.Mesh[] = [];
+    const shirtMats: THREE.MeshStandardMaterial[] = [];
 
-    const radius = ARENA.playerRadius;
-    const height = radius * 2.4;
+    const mat = (color: number): THREE.MeshStandardMaterial =>
+      new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0, flatShading: true });
 
-    const bodyGeo = new THREE.CapsuleGeometry(radius, height - radius * 2, 6, 12);
-    const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.25 });
-    const body = new THREE.Mesh(bodyGeo, bodyMat);
-    body.position.y = height / 2;
-    body.castShadow = true;
-    body.receiveShadow = true;
-    group.add(body);
+    const addMesh = (
+      parent: THREE.Object3D,
+      w: number,
+      h: number,
+      d: number,
+      material: THREE.MeshStandardMaterial,
+      x: number,
+      y: number,
+      z: number
+    ): THREE.Mesh => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      parent.add(m);
+      meshes.push(m);
+      return m;
+    };
 
-    // 正面を示すバイザー(発光パネル)。+x 方向(facing=0)を正面とする。
-    const visorGeo = new THREE.BoxGeometry(radius * 0.9, radius * 0.7, radius * 0.35);
-    const visorMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      emissive: glowColor,
-      emissiveIntensity: 1.2,
-      roughness: 0.3,
-    });
-    const visor = new THREE.Mesh(visorGeo, visorMat);
-    visor.position.set(radius * 0.85, height * 0.62, 0);
-    group.add(visor);
+    // 脚(股関節を中心に前後スイングするピボット)
+    const shirtMatL = mat(pantsColor);
+    const legL = new THREE.Group();
+    legL.position.set(-legW / 2, legH, 0);
+    addMesh(legL, legW, legH, legD, shirtMatL, 0, -legH / 2, 0);
+    group.add(legL);
 
-    // 攻撃中/被スタン中のグロー(外周にやや大きい半透明シェル)
-    const glowGeo = new THREE.CapsuleGeometry(radius * 1.25, height - radius * 2, 6, 12);
-    const glowMat = new THREE.MeshBasicMaterial({
-      color: glowColor,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-    });
-    const glow = new THREE.Mesh(glowGeo, glowMat);
-    glow.position.y = height / 2;
-    group.add(glow);
+    const legR = new THREE.Group();
+    legR.position.set(legW / 2, legH, 0);
+    addMesh(legR, legW, legH, legD, mat(pantsColor), 0, -legH / 2, 0);
+    group.add(legR);
 
-    return { group, body, visor, glow };
+    // 胴(シャツ色)
+    const bodyMat = mat(shirtColor);
+    shirtMats.push(bodyMat);
+    addMesh(group, bodyW, bodyH, bodyD, bodyMat, 0, legH + bodyH / 2, 0);
+
+    // 腕(肩を中心にスイング。シャツ色 + 先端に肌色の手)
+    const shoulderY = legH + bodyH;
+    const armLMat = mat(shirtColor);
+    shirtMats.push(armLMat);
+    const armL = new THREE.Group();
+    armL.position.set(-(bodyW / 2 + armW / 2), shoulderY, 0);
+    addMesh(armL, armW, armH * 0.78, armW, armLMat, 0, -armH * 0.39, 0);
+    addMesh(armL, armW, armH * 0.22, armW, mat(COLORS.skin), 0, -armH * 0.89, 0);
+    group.add(armL);
+
+    const armRMat = mat(shirtColor);
+    shirtMats.push(armRMat);
+    const armR = new THREE.Group();
+    armR.position.set(bodyW / 2 + armW / 2, shoulderY, 0);
+    addMesh(armR, armW, armH * 0.78, armW, armRMat, 0, -armH * 0.39, 0);
+    addMesh(armR, armW, armH * 0.22, armW, mat(COLORS.skin), 0, -armH * 0.89, 0);
+    group.add(armR);
+
+    // 頭(肌色)+ 髪 + 顔(目)。正面は +x。
+    const headY = legH + bodyH + head / 2;
+    addMesh(group, head, head, head, mat(COLORS.skin), 0, headY, 0);
+    // 髪(上面と後頭部)
+    const hairMat = mat(COLORS.hair);
+    addMesh(group, head * 1.04, head * 0.32, head * 1.04, hairMat, 0, headY + head * 0.36, 0);
+    addMesh(group, head * 0.28, head * 0.7, head * 1.04, hairMat, -head * 0.4, headY, 0);
+    // 目(白 + 瞳)。+x 面に貼る。
+    const eyeZ = head * 0.22;
+    const eyeY = headY + head * 0.08;
+    const eyeX = head / 2 + 0.3;
+    for (const sign of [-1, 1]) {
+      addMesh(group, 1.2, head * 0.18, head * 0.16, mat(COLORS.eyeWhite), eyeX, eyeY, sign * eyeZ);
+      addMesh(group, 1.4, head * 0.1, head * 0.08, mat(COLORS.eyePupil), eyeX, eyeY, sign * eyeZ - sign * head * 0.02);
+    }
+
+    group.position.set(0, 0, 0);
+
+    return {
+      group,
+      legL,
+      legR,
+      armL,
+      armR,
+      meshes,
+      shirtMats,
+      shirtColor,
+      walkPhase: 0,
+      swingAmp: 0,
+      lastX: 0,
+      lastZ: 0,
+      afterimages: [],
+    };
   }
 
-  /**
-   * キャラクターの位置・向き・状態表現(攻撃グロー/スタン点滅/回避半透明・残像)を更新する。
-   */
-  private updateCharacter(
-    group: THREE.Group,
-    body: THREE.Mesh,
-    visor: THREE.Mesh,
-    glow: THREE.Mesh,
-    afterimages: THREE.Mesh[],
-    p: PlayerState,
-    color: number
-  ): void {
+  private updateCharacter(rig: CharacterRig, p: PlayerState): void {
+    const { group } = rig;
     group.position.set(p.pos.x, 0, p.pos.z);
-    // facing(ラジアン, atan2(dz,dx)) → three.js の Y 軸回転。
-    // group の +x 方向(バイザーの向き)が facingVec=(cos,sin) と一致するように
-    // Y 軸回転角を -facing とする(three.js の回転は右手系で Z 軸が画面奥)。
+    // facing(atan2(dz,dx)) を three.js の Y 軸回転へ。+x 正面が facing 方向を向くよう -facing。
     group.rotation.y = -p.facing;
 
+    // 歩行アニメーション: 移動量から速度を見て腕脚をスイング
+    const moved = Math.hypot(p.pos.x - rig.lastX, p.pos.z - rig.lastZ);
+    rig.lastX = p.pos.x;
+    rig.lastZ = p.pos.z;
+    const moving = moved > 0.05 && p.stunTicks === 0;
+    rig.swingAmp += ((moving ? 0.7 : 0) - rig.swingAmp) * 0.2;
+    if (moving) rig.walkPhase += Math.min(0.6, moved * 0.35);
+    const swing = Math.sin(rig.walkPhase) * rig.swingAmp;
+    rig.legL.rotation.z = swing;
+    rig.legR.rotation.z = -swing;
+    rig.armL.rotation.z = -swing * 0.8;
+    rig.armR.rotation.z = swing * 0.8;
+
+    // 軽い待機の上下動
+    const bob = moving ? 0 : Math.sin(this.time / 420) * 0.6;
+    group.position.y = bob;
+
+    // 攻撃モーション(右腕を振りかぶって振り下ろす)
+    if (p.attack) {
+      const spec = ATTACKS[p.attack.kind];
+      const e = p.attack.elapsed;
+      let theta: number;
+      if (e <= spec.windup) {
+        // 振りかぶり(後方/上へ)
+        theta = -1.1 * (e / spec.windup);
+      } else {
+        // 振り下ろし(前方へ)
+        const t = Math.min(1, (e - spec.windup) / (spec.active + spec.recovery));
+        const eased = 1 - (1 - t) * (1 - t);
+        theta = -1.1 + 2.7 * eased;
+      }
+      rig.armR.rotation.z = theta;
+      rig.armL.rotation.z = -theta * 0.3;
+    }
+
+    // スタン: 点滅。攻撃中(active 以降): シャツを発光。回避中: 半透明。
     const isStunned = p.stunTicks > 0;
-    const isAttacking = p.attack !== null && p.attack.elapsed >= ATTACKS[p.attack.kind].windup;
-    const isIframe = p.dodge !== null && p.dodge.elapsed < DODGE.iframes;
+    const isActive = p.attack !== null && p.attack.elapsed >= ATTACKS[p.attack.kind].windup;
+    const dodging = p.dodge !== null;
+    const opacity = dodging ? 0.4 : 1;
+    const blink = isStunned && Math.sin(this.time / 55) > 0;
 
-    // 回避中(全体)は半透明
-    const bodyMat = body.material as THREE.MeshStandardMaterial;
-    const visorMat = visor.material as THREE.MeshStandardMaterial;
-    const baseOpacity = p.dodge !== null ? 0.45 : 1;
-    bodyMat.transparent = baseOpacity < 1;
-    bodyMat.opacity = baseOpacity;
-    visorMat.transparent = baseOpacity < 1;
-    visorMat.opacity = baseOpacity;
-
-    // スタン中は点滅(白っぽく)
-    if (isStunned) {
-      const blink = Math.sin(this.time / 60) > 0;
-      bodyMat.color.setHex(blink ? COLORS.stunned : color);
-      bodyMat.emissive.setHex(blink ? 0x222222 : 0x000000);
-    } else {
-      bodyMat.color.setHex(color);
-      bodyMat.emissive.setHex(0x000000);
+    for (const m of rig.meshes) {
+      const mm = m.material as THREE.MeshStandardMaterial;
+      mm.transparent = opacity < 1;
+      mm.opacity = opacity;
     }
-
-    // 攻撃中(active以降)はグローを表示
-    const glowMat = glow.material as THREE.MeshBasicMaterial;
-    if (isAttacking || isStunned) {
-      glowMat.opacity = isStunned ? 0.35 + 0.2 * Math.sin(this.time / 60) : 0.35;
-    } else {
-      glowMat.opacity = 0;
-    }
-
-    // 回避 i-frame 中は進行方向の逆側へ半透明の残像を配置する
-    this.updateAfterimages(group, afterimages, p, color, isIframe);
-  }
-
-  /** 回避ダッシュの軌跡を示す半透明の残像(クローン)を生成・更新する */
-  private updateAfterimages(
-    group: THREE.Group,
-    afterimages: THREE.Mesh[],
-    p: PlayerState,
-    color: number,
-    isIframe: boolean
-  ): void {
-    const ghostCount = 3;
-
-    // 残像メッシュが未生成なら、本体ボディの形状を複製して作る
-    if (afterimages.length === 0) {
-      const radius = ARENA.playerRadius;
-      const height = radius * 2.4;
-      const geo = new THREE.CapsuleGeometry(radius, height - radius * 2, 6, 12);
-      for (let i = 0; i < ghostCount; i++) {
-        const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0 });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.y = height / 2;
-        mesh.visible = false;
-        this.scene.add(mesh);
-        afterimages.push(mesh);
+    for (const sm of rig.shirtMats) {
+      if (blink) {
+        sm.emissive.setHex(0x555555);
+        sm.emissiveIntensity = 1;
+      } else if (isActive) {
+        sm.emissive.setHex(rig.shirtColor);
+        sm.emissiveIntensity = 0.6;
+      } else {
+        sm.emissive.setHex(0x000000);
+        sm.emissiveIntensity = 0;
       }
     }
 
-    if (!isIframe || !p.dodge) {
-      for (const ghost of afterimages) ghost.visible = false;
+    this.updateAfterimages(rig, p, dodging && p.dodge !== null && p.dodge.elapsed < DODGE.iframes);
+  }
+
+  /** 回避 i-frame 中、進行してきた軌跡側に半透明の残像ブロックを表示する */
+  private updateAfterimages(rig: CharacterRig, p: PlayerState, active: boolean): void {
+    const ghostCount = 3;
+    if (rig.afterimages.length === 0) {
+      const geo = new THREE.BoxGeometry(8 * U, 28 * U, 6 * U);
+      for (let i = 0; i < ghostCount; i++) {
+        const mat = new THREE.MeshBasicMaterial({ color: rig.shirtColor, transparent: true, opacity: 0 });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.visible = false;
+        this.scene.add(mesh);
+        rig.afterimages.push(mesh);
+      }
+    }
+    if (!active || !p.dodge) {
+      for (const g of rig.afterimages) g.visible = false;
       return;
     }
-
-    const radius = ARENA.playerRadius;
-    for (let i = 0; i < afterimages.length; i++) {
-      const ghost = afterimages[i];
-      const offset = (i + 1) * radius * 0.5;
-      // 残像はダッシュ方向の逆(進行してきた軌跡側)に伸ばす
-      ghost.position.x = group.position.x - p.dodge.dirX * offset;
-      ghost.position.z = group.position.z - p.dodge.dirZ * offset;
-      const mat = ghost.material as THREE.MeshBasicMaterial;
-      mat.opacity = 0.18 * (1 - i / (afterimages.length + 1));
-      ghost.visible = true;
+    for (let i = 0; i < rig.afterimages.length; i++) {
+      const g = rig.afterimages[i];
+      const offset = (i + 1) * ARENA.playerRadius * 0.6;
+      g.position.set(p.pos.x - p.dodge.dirX * offset, 14 * U, p.pos.z - p.dodge.dirZ * offset);
+      (g.material as THREE.MeshBasicMaterial).opacity = 0.2 * (1 - i / (rig.afterimages.length + 1));
+      g.visible = true;
     }
   }
 
   // --- 攻撃テレグラフ -------------------------------------------------------
 
-  /**
-   * windup 中の攻撃者の足元に表示する半透明の扇形(ウェッジ)を構築する。
-   * `aimAngle` を中心に `arcHalfAngle` の幅、`range` の長さを持つ扇形を
-   * 地面に平らに描画する。
-   */
   private buildTelegraph(): THREE.Mesh {
-    const geo = new THREE.CircleGeometry(1, 24, 0, 0.01); // ダミー。update 時に都度再構築
+    const geo = new THREE.CircleGeometry(1, 24, 0, 0.01);
     const mat = new THREE.MeshBasicMaterial({
       color: COLORS.telegraphLight,
       transparent: true,
@@ -422,74 +508,47 @@ export class Renderer {
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.rotation.x = -Math.PI / 2;
-    mesh.position.y = 0.3;
+    mesh.position.y = 6.5;
+    mesh.scale.z = -1;
     mesh.visible = false;
     return mesh;
   }
 
-  /** 両プレイヤーの攻撃テレグラフ(windup 中の扇形)を更新する */
-  private updateTelegraphs(p0: PlayerState, p1: PlayerState): void {
-    this.updateTelegraph(this.telegraphP0, p0);
-    this.updateTelegraph(this.telegraphP1, p1);
-  }
-
-  /**
-   * 指定プレイヤーの攻撃が windup 中であれば、テレグラフ(扇形)を
-   * aimAngle ± arcHalfAngle, 半径 range で構築して表示する。
-   * 弱攻撃=黄系、強攻撃=赤系。
-   */
   private updateTelegraph(mesh: THREE.Mesh, p: PlayerState): void {
     if (!p.attack || p.attack.elapsed >= ATTACKS[p.attack.kind].windup) {
       mesh.visible = false;
       return;
     }
-
     const kind = p.attack.kind;
     const spec = ATTACKS[kind];
     const progress = (p.attack.elapsed + 1) / spec.windup;
 
-    // 扇形ジオメトリを再構築(aimAngle ± arcHalfAngle, 半径 range)。
-    // three.js の CircleGeometry の角度系は XY 平面基準だが、ここでは
-    // 床に -90°回転させたメッシュのローカル X-Y が world X-Z に対応する。
     mesh.geometry.dispose();
-    const thetaStart = p.attack.aimAngle - spec.arcHalfAngle;
-    const thetaLength = spec.arcHalfAngle * 2;
-    mesh.geometry = new THREE.CircleGeometry(spec.range, 24, thetaStart, thetaLength);
-
-    mesh.position.set(p.pos.x, 0.3, p.pos.z);
-    // CircleGeometry は XY 平面上で構築され、mesh.rotation.x = -90° により
-    // ローカル Y が world -Z に対応する。world Z を反転させて aimAngle(atan2(dz,dx))と
-    // 一致させるため、メッシュをワールド Z 軸方向に反転する。
-    mesh.scale.z = -1;
+    mesh.geometry = new THREE.CircleGeometry(spec.range, 24, p.attack.aimAngle - spec.arcHalfAngle, spec.arcHalfAngle * 2);
+    mesh.position.set(p.pos.x, 6.5, p.pos.z);
 
     const mat = mesh.material as THREE.MeshBasicMaterial;
     mat.color.setHex(kind === 'heavy' ? COLORS.telegraphHeavy : COLORS.telegraphLight);
-    mat.opacity = 0.12 + 0.45 * progress;
+    mat.opacity = 0.15 + 0.5 * progress;
     mesh.visible = true;
   }
 
   // --- カメラ ---------------------------------------------------------------
 
-  /**
-   * 2プレイヤーの中点を注視しつつ、距離に応じて緩やかにズーム/追従する
-   * パースペクティブカメラを更新する。シェイクは注視点・カメラ位置の双方に加える。
-   */
   private updateCamera(state: GameState, effects: RenderEffects): void {
     const [p0, p1] = state.players;
     const midX = (p0.pos.x + p1.pos.x) / 2;
     const midZ = (p0.pos.z + p1.pos.z) / 2;
     const dist = Math.hypot(p1.pos.x - p0.pos.x, p1.pos.z - p0.pos.z);
 
-    // 注視点を緩やかに追従(急な切り替わりを避ける)
-    const targetLook = new THREE.Vector3(midX, ARENA.playerRadius, midZ);
+    const targetLook = new THREE.Vector3(midX, 28, midZ);
     this.lookTarget.lerp(targetLook, 0.08);
 
-    // 距離に応じてズーム(距離が遠いほど引く)。アリーナ全体が見渡せる範囲にクランプ。
-    const desiredDistance = THREE.MathUtils.clamp(420 + dist * 0.6, 420, 760);
+    const desiredDistance = THREE.MathUtils.clamp(440 + dist * 0.6, 440, 780);
     this.camDistance += (desiredDistance - this.camDistance) * 0.06;
 
-    // カメラはやや高く後方(-z寄り、+y方向)から見下ろす構図
-    const elevation = 0.55; // ラジアン相当の傾き比(高さ/水平距離)
+    // +Z 側のやや高い位置から見下ろす(Y 軸回転なし)。
+    const elevation = 0.6;
     const horizontal = this.camDistance * Math.cos(elevation);
     const vertical = this.camDistance * Math.sin(elevation);
 

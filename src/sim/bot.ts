@@ -1,15 +1,31 @@
 import { ATTACKS, DODGE } from '../engine/constants';
-import type { AttackKind, GameState, PlayerId, PlayerInput } from '../engine/types';
+import type { AttackKind, GameState, PlayerId, PlayerInput, Vec2 } from '../engine/types';
 
 export type Bot = (state: GameState, self: PlayerId) => PlayerInput;
 
-export const NO_INPUT: PlayerInput = { move: { forward: 0, strafe: 0 }, dodge: false, attack: null };
+export const NO_INPUT: PlayerInput = { move: { x: 0, z: 0 }, dodge: false, attack: null };
 
-/** ロックオン相対の距離(相手との直線距離) */
+/** 相手との直線距離 */
 function distance(state: GameState, self: PlayerId): number {
   const a = state.players[self];
   const b = state.players[1 - self];
   return Math.hypot(b.pos.x - a.pos.x, b.pos.z - a.pos.z);
+}
+
+/** 相手へ向かう単位ベクトル(ワールド相対)。重なっていれば 0 ベクトル。 */
+function towardOpponent(state: GameState, self: PlayerId): Vec2 {
+  const a = state.players[self];
+  const b = state.players[1 - self];
+  const dx = b.pos.x - a.pos.x;
+  const dz = b.pos.z - a.pos.z;
+  const d = Math.hypot(dx, dz);
+  if (d === 0) return { x: 0, z: 0 };
+  return { x: dx / d, z: dz / d };
+}
+
+/** ベクトルを 90° 回転(サイドステップ方向) */
+function perpendicular(v: Vec2): Vec2 {
+  return { x: v.z, z: -v.x };
 }
 
 /** 間合いを詰めて攻撃を出し続けるだけのボット。回避は行わない。 */
@@ -19,13 +35,13 @@ export const aggressiveBot: Bot = (state, self) => {
 
   const dist = distance(state, self);
   if (dist <= ATTACKS.light.range) {
-    return { move: { forward: 0, strafe: 0 }, dodge: false, attack: 'light' };
+    return { move: { x: 0, z: 0 }, dodge: false, attack: 'light' };
   }
   if (dist <= ATTACKS.heavy.range) {
-    return { move: { forward: 0, strafe: 0 }, dodge: false, attack: 'heavy' };
+    return { move: { x: 0, z: 0 }, dodge: false, attack: 'heavy' };
   }
-  // 範囲外: ロックオン正面方向(facing)へ前進して接近する
-  return { move: { forward: 1, strafe: 0 }, dodge: false, attack: null };
+  // 範囲外: 相手へ向かって前進して接近する
+  return { move: towardOpponent(state, self), dodge: false, attack: null };
 };
 
 /**
@@ -48,16 +64,16 @@ export function reactiveBot(reactionDelay: number): Bot {
       const canDodge = me.dodgeCooldown === 0 && me.stamina >= DODGE.staminaCost;
       if (ticksUntilActive >= 0 && ticksUntilActive <= reactionDelay && canDodge) {
         // move 0 = 入力なし → バックステップ方向(相手と反対)へダッシュする
-        return { move: { forward: 0, strafe: 0 }, dodge: true, attack: null };
+        return { move: { x: 0, z: 0 }, dodge: true, attack: null };
       }
     }
 
     const dist = distance(state, self);
     if (dist > ATTACKS.light.range) {
-      return { move: { forward: 1, strafe: 0 }, dodge: false, attack: null };
+      return { move: towardOpponent(state, self), dodge: false, attack: null };
     }
     if (dist <= ATTACKS.light.range && opp.attack === null && opp.stunTicks > 0) {
-      return { move: { forward: 0, strafe: 0 }, dodge: false, attack: 'light' };
+      return { move: { x: 0, z: 0 }, dodge: false, attack: 'light' };
     }
     return NO_INPUT;
   };
@@ -105,36 +121,42 @@ export function cpuBot(reactionDelay = 6, skipReactionChance = 0.35): Bot {
         canDodge &&
         Math.random() >= skipReactionChance
       ) {
-        // たまにサイドステップしながら回避する(strafe を混ぜる)
-        const strafe = Math.random() < 0.4 ? (Math.random() < 0.5 ? 1 : -1) : 0;
-        return { move: { forward: 0, strafe }, dodge: true, attack: null };
+        // たまにサイドステップしながら回避する(回避方向に横移動を混ぜる)
+        if (Math.random() < 0.4) {
+          const side = perpendicular(towardOpponent(state, self));
+          const s = Math.random() < 0.5 ? 1 : -1;
+          return { move: { x: side.x * s, z: side.z * s }, dodge: true, attack: null };
+        }
+        return { move: { x: 0, z: 0 }, dodge: true, attack: null };
       }
     }
 
     const dist = distance(state, self);
     const lightRange = ATTACKS.light.range;
+    const toward = towardOpponent(state, self);
 
     // 相手が硬直中(ジャスト回避で隙ができた)、または攻撃の空振り直後で
     // 間合い内なら攻め込む。
     if (dist <= lightRange && opp.attack === null && opp.stunTicks > 0) {
-      return { move: { forward: 0, strafe: 0 }, dodge: false, attack: Math.random() < 0.5 ? 'heavy' : 'light' };
+      return { move: { x: 0, z: 0 }, dodge: false, attack: Math.random() < 0.5 ? 'heavy' : 'light' };
     }
 
     // 間合いの維持: 近すぎたら離れ、遠すぎたら詰める。
     // 適度な距離ならランダムに軽攻撃を打ち込んだり、サイドステップで回り込む。
     if (dist > lightRange + 20) {
-      return { move: { forward: 1, strafe: 0 }, dodge: false, attack: null };
+      return { move: toward, dodge: false, attack: null };
     }
     if (dist < lightRange - 30) {
-      return { move: { forward: -1, strafe: 0 }, dodge: false, attack: null };
+      return { move: { x: -toward.x, z: -toward.z }, dodge: false, attack: null };
     }
     if (dist <= lightRange && opp.attack === null && Math.random() < 0.02) {
       const kind: AttackKind = Math.random() < 0.5 ? 'light' : 'heavy';
-      return { move: { forward: 0, strafe: 0 }, dodge: false, attack: kind };
+      return { move: { x: 0, z: 0 }, dodge: false, attack: kind };
     }
     if (Math.random() < 0.03) {
-      const strafe = Math.random() < 0.5 ? 1 : -1;
-      return { move: { forward: 0, strafe }, dodge: false, attack: null };
+      const side = perpendicular(toward);
+      const s = Math.random() < 0.5 ? 1 : -1;
+      return { move: { x: side.x * s, z: side.z * s }, dodge: false, attack: null };
     }
 
     return NO_INPUT;
