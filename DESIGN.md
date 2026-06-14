@@ -253,8 +253,10 @@ import されることは一切ない。`npm run sim` とエンジンのユニ�
 `unlock()` を最初のユーザー操作(`pointerdown`/`keydown`)で一度だけ呼んで
 `resume()` する(iOS Safari 対策)。`setMuted(true)` でミュート時は全メソッドが no-op になる。
 
-提供メソッド: `swing(kind)` / `hit(kind)` / `just()` / `dodge()` / `jump()` / `land()` / `ko()` /
-`roundStart()` / `matchEnd()`。呼び出しは上記「画面演出」節のイベント検出に連動する。
+提供メソッド: `swing(kind)` / `hit(kind)` / `just()` / `dodge()` / `jump()` / `land()` /
+`cue()` / `ko()` / `roundStart()` / `matchEnd()`。呼び出しは上記「画面演出」節のイベント検出に連動する。
+`cue()` はジャスト回避アシスト ON 時、攻撃が回避猶予に入った瞬間に鳴らす控えめな合図音
+(視覚の金色リングと対の聴覚キュー。VS CPU では人間が回避すべき CPU 側の攻撃に限定)。
 
 ### 7.3 パーティクル(`src/render/particles.ts`)
 

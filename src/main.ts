@@ -1,4 +1,4 @@
-import { ARENA, ATTACKS, TPS } from './engine/constants';
+import { ARENA, ATTACKS, JUST, TPS } from './engine/constants';
 import { step } from './engine/engine';
 import { createInitialState } from './engine/state';
 import type { GameState, Inputs } from './engine/types';
@@ -75,6 +75,15 @@ function playerCenter(p: GameState['players'][number]): { x: number; y: number }
   return { x: p.x + ARENA.playerSize / 2, y: ARENA.floorY + ARENA.playerSize / 2 };
 }
 
+/** その攻撃が windup 中で「ジャスト回避の猶予(active 開始まで JUST.window tick 以内)」に
+ *  入っているか。ジャスト回避アシストの聴覚キューの発火判定に使う。 */
+function attackInJustWindow(p: GameState['players'][number]): boolean {
+  if (!p.attack) return false;
+  const spec = ATTACKS[p.attack.kind];
+  if (p.attack.elapsed >= spec.windup) return false; // windup 中のみ
+  return spec.windup - p.attack.elapsed <= JUST.window;
+}
+
 /**
  * 直前 tick (prev) と直後 tick (next) の GameState を比較し、
  * 演出イベント(ジャスト回避・被弾・攻撃発生・回避発生・フェーズ遷移)を検出して
@@ -115,6 +124,13 @@ function detectEvents(prev: GameState, next: GameState): void {
     // 攻撃発生(elapsed === 1 の tick が「開始した」瞬間)
     if (after.attack && after.attack.elapsed === 1 && !before.attack) {
       audio.swing(after.attack.kind);
+    }
+
+    // ジャスト回避アシスト(音): 攻撃が「回避猶予」に入った瞬間、視覚の金色リングと
+    // 対になる控えめな合図を鳴らす。アシスト ON 時のみ。VS CPU では人間(P1)が回避すべき
+    // 相手(CPU = i===1)の攻撃に限定し、自分の攻撃では鳴らさない。
+    if (showJustCue && (!vsCpu || i === 1) && !attackInJustWindow(before) && attackInJustWindow(after)) {
+      audio.cue();
     }
 
     // 回避発生(elapsed === 1 の tick が「開始した」瞬間)

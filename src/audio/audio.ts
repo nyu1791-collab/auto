@@ -187,6 +187,15 @@ export class AudioEngine {
     this.playNoise({ duration: 0.06, gain: 0.08, filterType: 'lowpass', filterFreq: 400 });
   }
 
+  /**
+   * ジャスト回避の猶予に入った合図(視覚の金色リングと対になる聴覚キュー)。
+   * 「今が回避のタイミング」を耳でも学べるよう、ごく控えめな高い tick を鳴らす。
+   * アシスト ON 時のみ呼ばれる。
+   */
+  cue(): void {
+    this.playTone({ type: 'sine', freq: 1180, freqEnd: 1320, duration: 0.05, gain: 0.05 });
+  }
+
   /** KO 時の重い低音インパクト */
   ko(): void {
     this.playTone({ type: 'sawtooth', freq: 180, freqEnd: 40, duration: 0.5, gain: 0.3 });
