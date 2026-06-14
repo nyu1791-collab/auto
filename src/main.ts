@@ -1,14 +1,31 @@
-import { TPS } from './engine/constants';
+import { ARENA, ATTACKS, TPS } from './engine/constants';
 import { step } from './engine/engine';
 import { createInitialState } from './engine/state';
 import type { GameState, Inputs } from './engine/types';
+import { AudioEngine } from './audio/audio';
 import { InputManager } from './input/input';
+import { TouchControls } from './input/touch';
+import { ParticleSystem } from './render/particles';
 import { Renderer, type RenderEffects } from './render/renderer';
 import { CPU_DIFFICULTIES, cpuBot, type CpuDifficulty } from './sim/bot';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
+const viewport = document.getElementById('game-viewport') ?? document.body;
 const renderer = new Renderer(canvas);
 const input = new InputManager(window);
+const audio = new AudioEngine();
+const particles = new ParticleSystem();
+const touch = new TouchControls(input, viewport);
+
+// 最初のユーザー操作で AudioContext をアンロックする(iOS Safari 対策)。
+// 一度実行したら自身を解除する。
+function unlockAudioOnce(): void {
+  audio.unlock();
+  window.removeEventListener('pointerdown', unlockAudioOnce);
+  window.removeEventListener('keydown', unlockAudioOnce);
+}
+window.addEventListener('pointerdown', unlockAudioOnce);
+window.addEventListener('keydown', unlockAudioOnce);
 
 let state: GameState = createInitialState();
 
@@ -46,27 +63,71 @@ let shakeMagnitude = 0;
 let flashRemaining = 0;
 let justTextRemaining = 0;
 
+/** プレイヤーの中心座標(パーティクル発生位置の基準) */
+function playerCenter(p: GameState['players'][number]): { x: number; y: number } {
+  return { x: p.x + ARENA.playerSize / 2, y: ARENA.floorY + ARENA.playerSize / 2 };
+}
+
 /**
  * 直前 tick (prev) と直後 tick (next) の GameState を比較し、
- * 演出イベント(ジャスト回避・被弾)を検出してエフェクトをトリガーする。
+ * 演出イベント(ジャスト回避・被弾・攻撃発生・回避発生・フェーズ遷移)を検出して
+ * 画面エフェクト・パーティクル・音声をトリガーする。
  * エンジン自体は変更しない(副作用は main.ts 側のローカル状態のみ)。
  */
 function detectEvents(prev: GameState, next: GameState): void {
   for (let i = 0; i < 2; i++) {
     const before = prev.players[i];
     const after = next.players[i];
+    const opponent = next.players[1 - i];
 
-    // ジャスト回避成立: 攻撃側(相手)の stunTicks が 0 から増加した tick
+    // ジャスト回避成立: 攻撃側(相手 = i)の stunTicks が 0 から増加した tick
     if (before.stunTicks === 0 && after.stunTicks > 0) {
       hitstopRemaining = Math.max(hitstopRemaining, HITSTOP_MS);
       flashRemaining = Math.max(flashRemaining, FLASH_MS);
       justTextRemaining = Math.max(justTextRemaining, JUST_TEXT_MS);
+
+      // バーストは「決めた」側(防御側 = 相手)の位置に出す
+      const defenderCenter = playerCenter(opponent);
+      particles.burst(defenderCenter.x, defenderCenter.y, '#ffe066', 24);
+      audio.just();
     }
 
     // 被弾: HP が減少した tick
     if (after.hp < before.hp) {
       shakeRemaining = Math.max(shakeRemaining, SHAKE_MS);
       shakeMagnitude = Math.min(10, before.hp - after.hp);
+
+      const center = playerCenter(after);
+      const damage = before.hp - after.hp;
+      const kind = damage >= ATTACKS.heavy.damage ? 'heavy' : 'light';
+      const color = i === 0 ? '#4da6ff' : '#ff5d5d';
+      particles.sparks(center.x, center.y, color, kind === 'heavy' ? 20 : 12);
+      audio.hit(kind);
+    }
+
+    // 攻撃発生(elapsed === 1 の tick が「開始した」瞬間)
+    if (after.attack && after.attack.elapsed === 1 && !before.attack) {
+      audio.swing(after.attack.kind);
+    }
+
+    // 回避発生(elapsed === 1 の tick が「開始した」瞬間)
+    if (after.dodge && after.dodge.elapsed === 1 && !before.dodge) {
+      const center = playerCenter(after);
+      // facing の逆方向(回避ダッシュの進行方向)へ砂塵を出す
+      particles.dust(center.x, center.y, after.facing);
+      audio.dodge();
+    }
+  }
+
+  // フェーズ遷移
+  if (prev.phase !== next.phase) {
+    if (next.phase === 'starting') {
+      audio.roundStart();
+    } else if (next.phase === 'roundOver') {
+      const isKo = next.players.some((p) => p.hp <= 0);
+      if (isKo) audio.ko();
+    } else if (next.phase === 'matchOver') {
+      audio.matchEnd();
     }
   }
 }
@@ -82,12 +143,16 @@ function currentInputs(): Inputs {
 function handleMenuInputs(): void {
   if (input.wasJustPressed('c')) {
     vsCpu = !vsCpu;
+    touch.setTwoPlayer(!vsCpu);
   }
   if (input.wasJustPressed('v')) {
     const idx = CPU_DIFFICULTY_ORDER.indexOf(cpuDifficulty);
     cpuDifficulty = CPU_DIFFICULTY_ORDER[(idx + 1) % CPU_DIFFICULTY_ORDER.length];
     const { reactionDelay, skipReactionChance } = CPU_DIFFICULTIES[cpuDifficulty];
     cpu = cpuBot(reactionDelay, skipReactionChance);
+  }
+  if (input.wasJustPressed('m')) {
+    audio.setMuted(!audio.muted);
   }
   if (state.phase === 'matchOver') {
     if (input.wasJustPressed('enter') || input.wasJustPressed(' ')) {
@@ -130,10 +195,16 @@ function loop(now: number): void {
     input.poll();
   }
 
+  particles.update(delta);
+
+  const modeLabel = vsCpu
+    ? `VS CPU [${cpuDifficulty.toUpperCase()}] (C:対戦切替 V:難易度)`
+    : `VS PLAYER (C:対戦切替 V:難易度)`;
+  const muteIcon = audio.muted ? '🔇' : '🔊';
+
   const effects: RenderEffects = {
-    modeLabel: vsCpu
-      ? `VS CPU [${cpuDifficulty.toUpperCase()}] (C:対戦切替 V:難易度)`
-      : `VS PLAYER (C:対戦切替 V:難易度)`,
+    modeLabel: `${modeLabel}  ${muteIcon} M:ミュート`,
+    worldOverlay: (ctx) => particles.draw(ctx),
   };
 
   if (shakeRemaining > 0) {
@@ -150,7 +221,7 @@ function loop(now: number): void {
     effects.justTextAlpha = Math.min(1, justTextRemaining / (JUST_TEXT_MS * 0.6));
   }
 
-  renderer.render(state, effects);
+  renderer.render(state, effects, delta);
   requestAnimationFrame(loop);
 }
 

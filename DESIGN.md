@@ -31,37 +31,40 @@
 
 ## 3. プレイヤーパラメータ
 
-| 項目 | 値 |
-|---|---|
-| HP | 100 |
-| スタミナ | 最大 100 / 回復 25 per sec(≈0.417/tick) |
-| 移動速度 | 3 px/tick |
-| サイズ | 40 px |
-| アリーナ幅 | 800 px |
+| 項目       | 値                                      |
+| ---------- | --------------------------------------- |
+| HP         | 100                                     |
+| スタミナ   | 最大 100 / 回復 25 per sec(≈0.417/tick) |
+| 移動速度   | 3 px/tick                               |
+| サイズ     | 40 px                                   |
+| アリーナ幅 | 800 px                                  |
 
 ---
 
 ## 4. アクション定義(tick 単位)
 
 ### 攻撃
-| 攻撃 | 発生(windup) | 持続(active) | 硬直(recovery) | ダメージ | 間合い |
-|---|---|---|---|---|---|
-| 弱(Light) | 9 (150ms) | 2 | 12 | 10 | 70 px |
-| 強(Heavy) | 27 (450ms) | 3 | 30 | 30 | 90 px |
+
+| 攻撃      | 発生(windup) | 持続(active) | 硬直(recovery) | ダメージ | 間合い |
+| --------- | ------------ | ------------ | -------------- | -------- | ------ |
+| 弱(Light) | 9 (150ms)    | 2            | 12             | 10       | 70 px  |
+| 強(Heavy) | 27 (450ms)   | 3            | 30             | 30       | 90 px  |
 
 - ヒット判定は active フレーム中、間合い内にいる相手に発生。
 - 攻撃中は移動不可。
 
 ### 回避(Dodge)
-| 項目 | 値 |
-|---|---|
-| 無敵(i-frame) | 開始から 11 tick(≈180ms) |
-| 総持続 | 18 tick |
-| クールダウン | 持続終了後 6 tick |
-| スタミナ消費 | 35 |
-| 移動 | 回避方向へ 2 px/tick × i-frame 中(最大 22px。攻撃の間合いより十分小さく保つ) |
+
+| 項目          | 値                                                                           |
+| ------------- | ---------------------------------------------------------------------------- |
+| 無敵(i-frame) | 開始から 11 tick(≈180ms)                                                     |
+| 総持続        | 18 tick                                                                      |
+| クールダウン  | 持続終了後 6 tick                                                            |
+| スタミナ消費  | 35                                                                           |
+| 移動          | 回避方向へ 2 px/tick × i-frame 中(最大 22px。攻撃の間合いより十分小さく保つ) |
 
 ### ジャスト回避の判定ルール(重要)
+
 攻撃の active フレームが、防御側の i-frame と重なった場合 → **ダメージ無効**。
 そのうち、
 
@@ -104,10 +107,10 @@
 
 ## 6. 操作(ローカル 2P / 1キーボード)
 
-| | 移動 | 回避 | 弱 | 強 |
-|---|---|---|---|---|
-| P1(左・青) | A / D | W | F | G |
-| P2(右・赤) | ← / → | ↑ | K | L |
+|            | 移動  | 回避 | 弱  | 強  |
+| ---------- | ----- | ---- | --- | --- |
+| P1(左・青) | A / D | W    | F   | G   |
+| P2(右・赤) | ← / → | ↑    | K   | L   |
 
 追加操作:
 
@@ -115,6 +118,7 @@
   起動直後から 1 人で CPU と対戦できる。
 - **V**: CPU の難易度切替(`easy` → `normal` → `hard` を循環、デフォルトは `normal`)。
   VS PLAYER 中でも切替でき、次に VS CPU に戻したときに反映される。
+- **M**: ミュート切替(`AudioEngine` の ON/OFF。状態はモードラベルに 🔊/🔇 で表示)。
 - **Enter / Space**: `matchOver` 時に新しい試合を開始(`createInitialState()` を再生成)。
 
 ### CPU 対戦(`src/sim/bot.ts` の `cpuBot`)
@@ -133,24 +137,119 @@
 `reactionDelay` が `JUST.window`(7)以下であれば理論上ジャスト回避が成立し得るが、
 `skipReactionChance` が高いほど反応そのものをサボる確率が上がる。
 
-| 難易度 | reactionDelay | skipReactionChance | 傾向 |
-|---|---|---|---|
-| easy | 9 | 0.6 | 反応が遅く、サボりがち |
-| normal | 6 | 0.35 | `cpuBot()` の既定値 |
-| hard | 4 | 0.12 | 反応が早く、サボりが少ない |
+| 難易度 | reactionDelay | skipReactionChance | 傾向                       |
+| ------ | ------------- | ------------------ | -------------------------- |
+| easy   | 9             | 0.6                | 反応が遅く、サボりがち     |
+| normal | 6             | 0.35               | `cpuBot()` の既定値        |
+| hard   | 4             | 0.12               | 反応が早く、サボりが少ない |
 
 ### 画面演出(`main.ts` のエフェクトレイヤー)
 
 エンジンの純粋性を保ったまま、tick 前後の `GameState` を diff してイベントを検出し、
-見た目の演出だけを `main.ts` 側のローカル状態として加える:
+見た目・音・パーティクルの演出だけを `main.ts` 側のローカル状態として加える
+(`detectEvents(prev, next)`):
 
 - **ジャスト回避成立**(`stunTicks` が 0 から増加): 約 120ms のヒットストップ
-  (固定ステップの進行を一時停止、描画は継続)+ 画面フラッシュ + 「JUST!」テキスト。
-- **被弾**(`hp` 減少): 画面シェイク。
+  (固定ステップの進行を一時停止、描画は継続)+ 画面フラッシュ + 「JUST!」テキスト +
+  防御側の位置に `ParticleSystem.burst` + `AudioEngine.just()`。
+- **被弾**(`hp` 減少): 画面シェイク + 被弾位置に `ParticleSystem.sparks` +
+  `AudioEngine.hit(kind)`(減少量が `ATTACKS.heavy.damage` 以上なら `'heavy'`、
+  それ未満なら `'light'`)。
+- **攻撃発生**(`attack` が `null` → 非 `null`、`elapsed === 1`): `AudioEngine.swing(kind)`。
+- **回避発生**(`dodge` が `null` → 非 `null`、`elapsed === 1`): `ParticleSystem.dust` +
+  `AudioEngine.dodge()`。
+- **フェーズ遷移**(`phase` の変化): `'starting'` 開始時に `AudioEngine.roundStart()`、
+  `'roundOver'` 開始時に KO(いずれかの `hp <= 0`)なら `AudioEngine.ko()`、
+  `'matchOver'` 開始時に `AudioEngine.matchEnd()`。
 
 ---
 
-## 7. 技術スタック
+## 7. スマートフォン対応・音声・視覚効果(エンジン外レイヤー)
+
+以下はすべて `src/engine/**` の**外側**に存在する、描画・入力・演出専用のレイヤーである。
+`Math.random` / `Date` / `performance.now` / `AudioContext` / `PointerEvent` / DOM API は
+**これらのレイヤーのみ**で使用が許可されており、`src/engine/**` および `src/sim/**` から
+import されることは一切ない。`npm run sim` とエンジンのユニットテストは本節の変更による
+影響を受けず、決定論的な結果を保つ。
+
+### 7.1 タッチ操作(`src/input/touch.ts`)
+
+`TouchControls` クラスが、Pointer Events を使った画面上のボタン群を DOM に生成し、
+`InputManager.pressVirtual` / `releaseVirtual`(キーボードの keydown/keyup と同じ
+セマンティクスを持つ「仮想キー」API)に直結する。
+
+- **P1 操作クラスタ**(常時表示): ◀('a')・▶('d')・回避('w')・弱('f')・強('g')。
+  移動は画面左下、攻撃ボタンは右下、回避は他より大きいボタンとして強調配置。
+- **P2 操作クラスタ**: `setTwoPlayer(true)`(VS PLAYER モード)のときのみ、P1 と左右反転した
+  配置で画面右側に表示する。タブレットを横向きに置いた対面プレイを想定。
+- **メニュー行**(上部、常時表示): 対戦切替('c')・難易度('v')・ミュート('m')・
+  リスタート('enter')。これらは「タップした瞬間だけ」反応すればよいため、
+  `pressVirtual` 直後に `releaseVirtual` して `justPressed` にのみ残す(`momentary`)。
+- 各ボタンは `pointerdown`/`pointerup`/`pointercancel`/`pointerleave` +
+  `setPointerCapture` + `preventDefault` で実装され、ボタンごとに独立した
+  ポインタを扱うためマルチタッチ(例: ◀ を押しながら回避をタップ)に対応する。
+- `isTouchDevice()` が `window.matchMedia('(pointer: coarse)').matches` または
+  `'ontouchstart' in window` でタッチ環境を検出し、該当時のみ UI を表示する
+  (CSS クラス `tc-visible` の切替)。
+
+### 7.2 音声(`src/audio/audio.ts`)
+
+`AudioEngine` クラスが Web Audio API のオシレーター/ノイズバッファ + ゲインエンベロープで
+効果音をその場合成する(音声アセットファイル不使用)。`AudioContext` は遅延生成し、
+`unlock()` を最初のユーザー操作(`pointerdown`/`keydown`)で一度だけ呼んで
+`resume()` する(iOS Safari 対策)。`setMuted(true)` でミュート時は全メソッドが no-op になる。
+
+提供メソッド: `swing(kind)` / `hit(kind)` / `just()` / `dodge()` / `ko()` /
+`roundStart()` / `matchEnd()`。呼び出しは上記「画面演出」節のイベント検出に連動する。
+
+### 7.3 パーティクル(`src/render/particles.ts`)
+
+`ParticleSystem` クラスが `{x, y, vx, vy, life, maxLife, size, color, gravity}` の
+シンプルなパーティクルを管理する(`Math.random` 使用、視覚効果のみで決定性に影響しない)。
+
+- `sparks(x, y, color, count)`: ヒット時の火花。
+- `burst(x, y, color, count)`: ジャスト回避成立時の放射状バースト。
+- `dust(x, y, dir)`: 回避時に進行方向へ広がる砂塵。
+- `update(dtMs)` で運動・寿命を更新し、`draw(ctx)` で `life/maxLife` を alpha として描画する。
+  総数は `MAX_PARTICLES`(400)で上限管理する。
+
+### 7.4 レンダラー強化(`src/render/renderer.ts`)
+
+`RenderEffects` に `worldOverlay?: (ctx) => void` を追加し、画面シェイク変換の内側・
+キャラクター描画より後・HUD より前で呼び出す(`main.ts` から `particles.draw(ctx)` を渡す)。
+
+主な視覚強化:
+
+- グラデーション背景・床・各ファイターの足元シャドウ。
+- キャラクターを角丸ボディ + グラデーション塗りで描画し、`facing` 方向を示す
+  「目」マークを追加。攻撃中・被スタン中はグロー(`shadowBlur`)で強調。
+- 回避の i-frame 中(`dodge.elapsed < DODGE.iframes`)は進行方向に半透明の
+  残像(アフターイメージ)を描画。
+- HUD の HP バーは Renderer 内部に保持する「表示用 HP」を実値へ毎フレーム補間
+  (lerp)させ、滑らかに減少させる。直前の減少分は薄い色の
+  「チップダメージ」として一時的に残してフェードアウトする
+  (この補間状態は描画専用で、ゲームロジック・決定性には影響しない)。
+- WINS 表示をピップ(丸印)化し、READY/FIGHT! やラウンド/マッチ結果画面に
+  フェード・スケールの演出を追加。「JUST!」テキストは `justTextAlpha` に応じて
+  ポップする(出現直後に拡大→収束)スケール効果を持つ。
+
+### 7.5 モバイル向け HTML/CSS(`index.html`)
+
+- ビューポートメタタグでピンチズーム/二重タップズームを無効化
+  (`maximum-scale=1, user-scalable=no, viewport-fit=cover`)。
+- ゲームコンテナはビューポート全体に広がり、キャンバスは 800:450(16:9)の比率を
+  保ったまま `min(100vw, 100dvh * 16/9)` などで最大サイズにフィットする
+  (モバイル Safari の `100vh` 問題を避けるため `dvh` を使用)。
+- タッチ操作 UI はキャンバスのビューポート要素に重ねて配置する。
+- 画面が縦向きの小型タッチデバイスでは、横向きを促す案内オーバーレイを表示する
+  (`(pointer: coarse) and (orientation: portrait)` で判定し、デスクトップの
+  縦長ウィンドウでは表示しない)。
+- ノッチ等のセーフエリアは `env(safe-area-inset-*)` で操作 UI にパディングする。
+- 既存のキーボード操作ヒントはタッチデバイス(`(pointer: coarse)`)では非表示にする。
+
+---
+
+## 8. 技術スタック
 
 - **TypeScript + Vite**(開発サーバ / ビルド)
 - **HTML5 Canvas** 描画(幾何図形ベース、軽量)
@@ -159,6 +258,7 @@
 - **GitHub Actions** CI(install → lint → typecheck → test → build)
 
 ### アーキテクチャ方針
+
 ゲームロジック(純粋・テスト可能)を描画・入力から完全分離する。
 
 ```
@@ -170,24 +270,32 @@ src/
     combat.ts      攻撃・回避・ジャスト回避の解決(純粋関数)
     engine.ts      1 tick を進める step 関数(純粋)
   input/
-    input.ts       キーボード → InputState
+    input.ts       キーボード/仮想キー → InputState
+    touch.ts       タッチ操作 UI(Pointer Events → 仮想キー)
+  audio/
+    audio.ts       Web Audio による効果音エンジン
   render/
     renderer.ts    GameState → Canvas 描画
+    particles.ts   演出パーティクルシステム
   sim/
     bot.ts         スクリプト AI(aggressive / reactive / CPU 対戦用 cpuBot)
     simulate.ts    ヘッドレス対戦ランナー(バランス検証ツール)
-  main.ts          ブートストラップ(ループ・入力・描画の結線)
+  main.ts          ブートストラップ(ループ・入力・描画・音声・パーティクルの結線)
 test/
   combat.test.ts
   engine.test.ts
+  input.test.ts
 ```
 
 - `engine` 配下はブラウザ API に依存しない純粋ロジック。`step(state, inputs) -> state`。
 - `constants.ts` が全バランス値の唯一の出典(本書と一致させる)。
+- `input/touch.ts`・`audio/audio.ts`・`render/particles.ts`・`render/renderer.ts` の視覚/音声強化は
+  `DOM`/`AudioContext`/`PointerEvent`/`Math.random` に依存するエンジン外レイヤーであり、
+  `engine`/`sim` から import されない(7 章参照)。
 
 ---
 
-## 8. 自動化ツール
+## 9. 自動化ツール
 
 1. **CI パイプライン**(`.github/workflows/ci.yml`):push/PR で lint・typecheck・test・build。
 2. **SessionStart hook**(`.claude/hooks/session-start.sh`):Web セッション起動時に `npm install`。

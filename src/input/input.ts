@@ -44,6 +44,22 @@ export class InputManager {
     return this.justPressed.has(key.toLowerCase());
   }
 
+  /**
+   * 仮想キー押下(タッチUIなど)を keydown と同じ意味で `pressed`/`justPressed` に
+   * 反映する。キーボードの `keydown` と完全に同じセマンティクスを持つため、
+   * 同一 tick 内での press→release(タップ)も `justPressed` に残る。
+   */
+  pressVirtual(key: string): void {
+    const k = key.toLowerCase();
+    if (!this.pressed.has(k)) this.justPressed.add(k);
+    this.pressed.add(k);
+  }
+
+  /** 仮想キー解放(タッチUIなど)を keyup と同じ意味で `pressed` から取り除く */
+  releaseVirtual(key: string): void {
+    this.pressed.delete(key.toLowerCase());
+  }
+
   private readPlayer(keys: KeyMap): PlayerInput {
     let move = 0;
     if (this.pressed.has(keys.left)) move -= 1;
