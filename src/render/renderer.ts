@@ -792,6 +792,18 @@ export class Renderer {
       this.roundedRectPath(x, margin, barWidth, barHeight, radius);
       ctx.stroke();
 
+      // --- HP 数値(バーの内側端=中央寄りに表示。残量が一目で分かる) ---
+      const hpText = `${Math.max(0, Math.ceil(p.hp))}`;
+      ctx.font = 'bold 12px system-ui';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.shadowColor = 'rgba(0,0,0,0.6)';
+      ctx.shadowBlur = 3;
+      ctx.textAlign = i === 0 ? 'right' : 'left';
+      ctx.fillText(hpText, i === 0 ? x + barWidth - 6 : x + 6, margin + barHeight / 2);
+      ctx.shadowBlur = 0;
+      ctx.textBaseline = 'alphabetic';
+
       // --- スタミナバー ---
       const sy = margin + barHeight + 6;
       this.drawRoundedRect(x, sy, barWidth, 7, 3, COLORS.staminaBack);
