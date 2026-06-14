@@ -56,11 +56,13 @@ export interface AttackSpec {
  * 攻撃フレーム。windup(発生)は「反応して回避するための猶予」そのものなので、
  * 易化のため弱 9→16(150→267ms)・強 27→32(450→533ms)へ延ばし、
  * 攻撃が見てから十分反応できる速さにしている(モーション/テレグラフ/アシストリングも
- * その分長く表示される)。active/recovery/ダメージ/間合いは据え置き。
+ * その分長く表示される)。
+ * ダメージも易化(被弾の許容回数を増やす)として弱 10→8・強 30→24 に引き下げた
+ * (強 5 発・弱 13 発で KO。ミスを取り返す余地を広げる)。active/recovery/間合いは据え置き。
  */
 export const ATTACKS: Record<'light' | 'heavy', AttackSpec> = {
-  light: { windup: 16, active: 2, recovery: 12, damage: 10, range: 70, verticalRange: 52 },
-  heavy: { windup: 32, active: 3, recovery: 30, damage: 30, range: 90, verticalRange: 60 },
+  light: { windup: 16, active: 2, recovery: 12, damage: 8, range: 70, verticalRange: 52 },
+  heavy: { windup: 32, active: 3, recovery: 30, damage: 24, range: 90, verticalRange: 60 },
 } as const;
 
 export const DODGE = {
