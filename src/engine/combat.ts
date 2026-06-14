@@ -27,6 +27,10 @@ export function resolveAttackTick(
   const distance = Math.abs(attacker.x - defender.x);
   if (distance > spec.range) return null;
 
+  // 縦方向の間合い: 高さ差が大きい(相手がジャンプで飛び越えた)ときは当たらない
+  const heightGap = Math.abs(attacker.y - defender.y);
+  if (heightGap > spec.verticalRange) return null;
+
   if (defender.dodge && defender.dodge.elapsed < DODGE.iframes) {
     // この active フレームが最初に発生した tick(ジャスト判定の基準点)
     const activeStartTick = globalTick - (atk.elapsed - spec.windup);

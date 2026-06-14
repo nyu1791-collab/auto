@@ -4,12 +4,20 @@ interface KeyMap {
   left: string;
   right: string;
   dodge: string;
+  jump: string;
   light: string;
   heavy: string;
 }
 
-const P1_KEYS: KeyMap = { left: 'a', right: 'd', dodge: 'w', light: 'f', heavy: 'g' };
-const P2_KEYS: KeyMap = { left: 'arrowleft', right: 'arrowright', dodge: 'arrowup', light: 'k', heavy: 'l' };
+const P1_KEYS: KeyMap = { left: 'a', right: 'd', dodge: 'w', jump: ' ', light: 'f', heavy: 'g' };
+const P2_KEYS: KeyMap = {
+  left: 'arrowleft',
+  right: 'arrowright',
+  dodge: 'arrowup',
+  jump: 'shift',
+  light: 'k',
+  heavy: 'l',
+};
 
 /** キーボード入力を保持し、tick ごとに PlayerInput へ変換する */
 export class InputManager {
@@ -72,6 +80,7 @@ export class InputManager {
     return {
       move: move as -1 | 0 | 1,
       dodge: this.justPressed.has(keys.dodge),
+      jump: this.justPressed.has(keys.jump),
       attack,
     };
   }

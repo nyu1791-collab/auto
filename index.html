@@ -149,12 +149,20 @@
       }
 
       /* --- P1 / P2 操作クラスタ --------------------------------------- */
+      /* デフォルト(VS CPU = 1人プレイ)では P1 クラスタを画面全幅に広げ、
+         移動ボタンを左端・アクションボタンを右端へ大きく離して配置する。
+         VS PLAYER(2P対戦)に切り替えると `tc-two-player` が付与され、
+         左右半分ずつに戻る(対面プレイ用)。 */
       .tc-cluster {
         position: absolute;
         bottom: env(safe-area-inset-bottom, 0px);
-        width: 50%;
+        width: 100%;
         height: 45%;
         pointer-events: none;
+      }
+
+      .touch-controls.tc-two-player .tc-cluster {
+        width: 50%;
       }
 
       .tc-p1 {
@@ -169,7 +177,7 @@
         display: none;
       }
 
-      /* P1: 左下に移動(◀▶)、右下に攻撃/回避ボタン */
+      /* P1: 左下に移動(◀▶)、右下にアクションボタン群(回避・ジャンプ・弱・強) */
       .tc-p1 .tc-left {
         left: 12px;
         bottom: 14px;
@@ -185,13 +193,23 @@
       }
 
       .tc-p1 .tc-dodge {
-        right: 12px;
-        bottom: 78px;
-        width: 68px;
-        height: 68px;
-        font-size: 15px;
+        right: 88px;
+        bottom: 82px;
+        width: 64px;
+        height: 64px;
+        font-size: 14px;
         background: rgba(77, 166, 255, 0.18);
         border-color: rgba(77, 166, 255, 0.5);
+      }
+
+      .tc-p1 .tc-jump {
+        right: 16px;
+        bottom: 82px;
+        width: 64px;
+        height: 64px;
+        font-size: 12px;
+        background: rgba(120, 230, 160, 0.18);
+        border-color: rgba(120, 230, 160, 0.5);
       }
 
       .tc-p1 .tc-light {
@@ -224,13 +242,23 @@
       }
 
       .tc-p2 .tc-dodge {
-        left: 12px;
-        bottom: 78px;
-        width: 68px;
-        height: 68px;
-        font-size: 15px;
+        left: 88px;
+        bottom: 82px;
+        width: 64px;
+        height: 64px;
+        font-size: 14px;
         background: rgba(255, 93, 93, 0.18);
         border-color: rgba(255, 93, 93, 0.5);
+      }
+
+      .tc-p2 .tc-jump {
+        left: 16px;
+        bottom: 82px;
+        width: 64px;
+        height: 64px;
+        font-size: 12px;
+        background: rgba(120, 230, 160, 0.18);
+        border-color: rgba(120, 230, 160, 0.5);
       }
 
       .tc-p2 .tc-light {
@@ -289,7 +317,8 @@
       </div>
     </div>
     <div class="controls">
-      P1: A/D 移動 · W 回避 · F 弱 · G 強 &nbsp;|&nbsp; P2: ←/→ 移動 · ↑ 回避 · K 弱 · L 強
+      P1: A/D 移動 · W 回避 · Space ジャンプ(空中で二段ジャンプ可) · F 弱 · G 強 &nbsp;|&nbsp; P2: ←/→
+      移動 · ↑ 回避 · Shift ジャンプ · K 弱 · L 強
       <br />
       C: CPU対戦 / 2P対戦 切替(デフォルトは CPU 対戦) &nbsp;|&nbsp; V:
       CPU難易度切替(EASY/NORMAL/HARD) &nbsp;|&nbsp; M: ミュート切替 &nbsp;|&nbsp; Enter:

@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { step } from '../src/engine/engine';
-import { ARENA, ATTACKS, DODGE, JUST, MATCH, PLAYER, TPS } from '../src/engine/constants';
+import { ARENA, ATTACKS, DODGE, JUMP, JUST, MATCH, PLAYER, TPS } from '../src/engine/constants';
 import { createInitialState } from '../src/engine/state';
 import type { GameState, Inputs, PlayerInput, PlayerState } from '../src/engine/types';
 
-const NO_INPUT: PlayerInput = { move: 0, dodge: false, attack: null };
+const NO_INPUT: PlayerInput = { move: 0, dodge: false, jump: false, attack: null };
 
 function makePlayer(id: 0 | 1, overrides: Partial<PlayerState> = {}): PlayerState {
   return {
     id,
     x: 0,
+    y: 0,
+    vy: 0,
+    airJumps: JUMP.airJumps,
     facing: id === 0 ? 1 : -1,
     hp: PLAYER.maxHp,
     stamina: PLAYER.maxStamina,
@@ -66,6 +69,59 @@ describe('movement', () => {
 
     const right = makeState({ x: ARENA.width - ARENA.playerSize }, { x: 300 });
     expect(step(right, inputs({ move: 1 })).players[0].x).toBe(ARENA.width - ARENA.playerSize);
+  });
+});
+
+describe('jump and gravity', () => {
+  it('launches the player upward and applies gravity on the same tick', () => {
+    const state = makeState({ x: 100 }, { x: 300 });
+    const next = step(state, inputs({ jump: true }));
+
+    expect(next.players[0].vy).toBeCloseTo(JUMP.velocity - JUMP.gravity);
+    expect(next.players[0].y).toBeCloseTo(JUMP.velocity);
+    expect(next.players[0].airJumps).toBe(JUMP.airJumps);
+  });
+
+  it('does not jump while locked (attacking, dodging, or stunned)', () => {
+    const state = makeState({ x: 100, attack: { kind: 'light', elapsed: 1, hasHit: false } }, { x: 300 });
+    const next = step(state, inputs({ jump: true }));
+
+    expect(next.players[0].vy).toBe(0);
+    expect(next.players[0].y).toBe(0);
+  });
+
+  it('falls back to the ground, zeroing vy and restoring airJumps on landing', () => {
+    const state = makeState({ x: 100, y: 2, vy: -3, airJumps: 0 }, { x: 300 });
+    const next = step(state, inputs());
+
+    expect(next.players[0].y).toBe(0);
+    expect(next.players[0].vy).toBe(0);
+    expect(next.players[0].airJumps).toBe(JUMP.airJumps);
+  });
+
+  it('consumes an air jump for a double jump while airborne', () => {
+    const state = makeState({ x: 100, y: 20, vy: -2, airJumps: 1 }, { x: 300 });
+    const next = step(state, inputs({ jump: true }));
+
+    expect(next.players[0].airJumps).toBe(0);
+    expect(next.players[0].vy).toBeCloseTo(JUMP.velocity - JUMP.gravity);
+    expect(next.players[0].y).toBeCloseTo(20 + JUMP.velocity);
+  });
+
+  it('ignores jump input when airborne with no air jumps left', () => {
+    const state = makeState({ x: 100, y: 20, vy: -2, airJumps: 0 }, { x: 300 });
+    const next = step(state, inputs({ jump: true }));
+
+    expect(next.players[0].airJumps).toBe(0);
+    expect(next.players[0].vy).toBeCloseTo(-2 - JUMP.gravity);
+    expect(next.players[0].y).toBeCloseTo(20 - 2);
+  });
+
+  it('uses the reduced air move speed while airborne', () => {
+    const state = makeState({ x: 100, y: 10, vy: 1 }, { x: 300 });
+    const next = step(state, inputs({ move: 1 }));
+
+    expect(next.players[0].x).toBe(100 + PLAYER.airMoveSpeed);
   });
 });
 

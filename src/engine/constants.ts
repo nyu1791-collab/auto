@@ -18,8 +18,28 @@ export const PLAYER = {
   maxStamina: 100,
   /** スタミナ自然回復: 25/sec を tick あたりに換算 */
   staminaRegenPerTick: 25 / TPS,
-  /** 通常移動速度 px/tick */
+  /** 地上の通常移動速度 px/tick */
   moveSpeed: 3,
+  /** 空中の横移動速度 px/tick(地上より控えめにして空中制御を弱める) */
+  airMoveSpeed: 2.2,
+} as const;
+
+/**
+ * ジャンプ(縦移動)パラメータ。床(y=0)から上方向へ初速 `velocity` で跳び、
+ * 毎 tick `gravity` ずつ減速して放物線を描く。`airJumps` 回だけ空中で再ジャンプできる
+ * (二段ジャンプ)。これにより相手と独立に高さ方向へ動け、攻撃を「飛び越えて」
+ * 回避する選択肢が生まれる。
+ *
+ * apex 高さ = velocity^2 / (2*gravity) ≈ 9^2/(2*0.55) ≈ 74px、
+ * 滞空 ≈ 2*velocity/gravity ≈ 33 tick ≈ 0.55s。
+ */
+export const JUMP = {
+  /** ジャンプ初速 px/tick(上向き) */
+  velocity: 9,
+  /** 重力加速度 px/tick^2 */
+  gravity: 0.55,
+  /** 接地後に許可される空中ジャンプ回数(=二段ジャンプなら 1) */
+  airJumps: 1,
 } as const;
 
 export interface AttackSpec {
@@ -28,11 +48,13 @@ export interface AttackSpec {
   recovery: number;
   damage: number;
   range: number;
+  /** 縦方向の有効間合い px。攻防の高さ差がこれを超えるとヒットしない(飛び越え回避) */
+  verticalRange: number;
 }
 
 export const ATTACKS: Record<'light' | 'heavy', AttackSpec> = {
-  light: { windup: 9, active: 2, recovery: 12, damage: 10, range: 70 },
-  heavy: { windup: 27, active: 3, recovery: 30, damage: 30, range: 90 },
+  light: { windup: 9, active: 2, recovery: 12, damage: 10, range: 70, verticalRange: 52 },
+  heavy: { windup: 27, active: 3, recovery: 30, damage: 30, range: 90, verticalRange: 60 },
 } as const;
 
 export const DODGE = {

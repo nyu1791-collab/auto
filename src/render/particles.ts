@@ -67,6 +67,25 @@ export class ParticleSystem {
     }
   }
 
+  /** ジャンプ着地時、足元から左右に広がる砂塵 */
+  landingDust(x: number, y: number): void {
+    const count = 10;
+    for (let i = 0; i < count; i++) {
+      const speed = 0.04 + Math.random() * 0.1;
+      this.spawn({
+        x,
+        y,
+        vx: (Math.random() * 2 - 1) * speed,
+        vy: -(0.03 + Math.random() * 0.05),
+        life: 220 + Math.random() * 180,
+        maxLife: 400,
+        size: 2 + Math.random() * 3,
+        color: 'rgba(200,200,200,0.9)',
+        gravity: 0.0004,
+      });
+    }
+  }
+
   /** 回避時に発生する方向への砂塵 */
   dust(x: number, y: number, dir: 1 | -1): void {
     const count = 8;

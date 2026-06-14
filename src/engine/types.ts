@@ -14,6 +14,8 @@ export interface PlayerInput {
   move: -1 | 0 | 1;
   /** 回避を開始しようとしているか(押した瞬間に true) */
   dodge: boolean;
+  /** ジャンプを開始しようとしているか(押した瞬間に true) */
+  jump: boolean;
   /** この tick に開始したい攻撃。なければ null */
   attack: AttackKind | null;
 }
@@ -38,6 +40,12 @@ export interface DodgeState {
 export interface PlayerState {
   id: PlayerId;
   x: number;
+  /** 床からの高さ(px、0 = 接地)。上方向が正。ジャンプ中のみ > 0 */
+  y: number;
+  /** 縦方向の速度(px/tick、上向きが正)。重力で毎 tick 減少する */
+  vy: number;
+  /** 残り空中ジャンプ回数(接地で airJumps に回復) */
+  airJumps: number;
   facing: Facing;
   hp: number;
   stamina: number;

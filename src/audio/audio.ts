@@ -176,6 +176,17 @@ export class AudioEngine {
     this.playNoise({ duration: 0.16, gain: 0.14, filterType: 'lowpass', filterFreq: 3000, filterFreqEnd: 400 });
   }
 
+  /** ジャンプ発生時の上昇音(二段ジャンプでも同じ音を鳴らす) */
+  jump(): void {
+    this.playTone({ type: 'sine', freq: 320, freqEnd: 640, duration: 0.1, gain: 0.12 });
+  }
+
+  /** 着地時の軽い衝撃音 */
+  land(): void {
+    this.playTone({ type: 'sine', freq: 140, freqEnd: 60, duration: 0.08, gain: 0.1 });
+    this.playNoise({ duration: 0.06, gain: 0.08, filterType: 'lowpass', filterFreq: 400 });
+  }
+
   /** KO 時の重い低音インパクト */
   ko(): void {
     this.playTone({ type: 'sawtooth', freq: 180, freqEnd: 40, duration: 0.5, gain: 0.3 });

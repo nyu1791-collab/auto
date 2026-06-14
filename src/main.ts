@@ -117,6 +117,17 @@ function detectEvents(prev: GameState, next: GameState): void {
       particles.dust(center.x, center.y, after.facing);
       audio.dodge();
     }
+
+    // ジャンプ発生(vy が 0 以下から上昇に転じた tick。二段ジャンプでも同じ音を鳴らす)
+    if (after.vy > 0 && before.vy <= 0) {
+      audio.jump();
+    }
+
+    // 着地(空中から接地に転じた tick): 足元に砂塵を出す
+    if (before.y > 0 && after.y === 0) {
+      particles.landingDust(after.x + ARENA.playerSize / 2, ARENA.floorY + ARENA.playerSize);
+      audio.land();
+    }
   }
 
   // フェーズ遷移

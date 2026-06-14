@@ -1,4 +1,4 @@
-import { ARENA, ATTACKS, DODGE, MATCH, PLAYER } from '../engine/constants';
+import { ARENA, ATTACKS, DODGE, JUMP, MATCH, PLAYER } from '../engine/constants';
 import type { GameState, PlayerState } from '../engine/types';
 
 const COLORS = {
@@ -32,6 +32,10 @@ const COLORS = {
 const HP_LERP_RATE = 0.12;
 /** チップダメージ表示が消えるまでの時間(ms) */
 const CHIP_DECAY_MS = 600;
+/** 接地直後の「着地つぶれ」スカッシュ演出が持続する時間(ms) */
+const LANDING_SQUASH_MS = 140;
+/** ジャンプ/落下中の伸縮(スクワッシュ&ストレッチ)の最大変形率 */
+const AIR_STRETCH_MAX = 0.12;
 
 /**
  * main.ts のエフェクトレイヤーから渡される、tick 間の一時的な見た目情報。
@@ -65,6 +69,10 @@ export class Renderer {
   private chipRemaining: [number, number] = [0, 0];
   /** 背景の微妙なアニメーション用の時間累積(ms)。描画のみに使用、ロジックには影響しない */
   private time = 0;
+  /** 直前フレームの vy(着地判定用)。プレイヤーごと */
+  private prevVy: [number, number] = [0, 0];
+  /** 着地つぶれ(スクワッシュ)演出の残り時間(ms)。プレイヤーごと */
+  private landingSquash: [number, number] = [0, 0];
 
   constructor(private canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d');
@@ -77,6 +85,7 @@ export class Renderer {
 
     this.time += dtMs;
     this.updateHpDisplay(state, dtMs);
+    this.updateJumpEffects(state, dtMs);
 
     ctx.save();
     ctx.translate(effects.shakeX ?? 0, effects.shakeY ?? 0);
@@ -120,6 +129,24 @@ export class Renderer {
       if (this.chipRemaining[i] > 0) {
         this.chipRemaining[i] = Math.max(0, this.chipRemaining[i] - dtMs);
       }
+    }
+  }
+
+  /**
+   * 着地つぶれ(スクワッシュ)演出の状態を更新する(描画専用、ロジックには影響しない)。
+   * `vy` が「正(上昇)以下」から「接地(y=0, vy=0)」に転じた tick を着地と判定し、
+   * `LANDING_SQUASH_MS` の間だけつぶれ演出を再生する。
+   */
+  private updateJumpEffects(state: GameState, dtMs: number): void {
+    for (let i = 0; i < 2; i++) {
+      const p = state.players[i];
+      if (p.y === 0 && p.vy === 0 && this.prevVy[i] < 0) {
+        this.landingSquash[i] = LANDING_SQUASH_MS;
+      }
+      if (this.landingSquash[i] > 0) {
+        this.landingSquash[i] = Math.max(0, this.landingSquash[i] - dtMs);
+      }
+      this.prevVy[i] = p.vy;
     }
   }
 
@@ -168,15 +195,22 @@ export class Renderer {
     ctx.fillRect(0, h - 6, w, 6);
   }
 
-  /** 各ファイターの足元に、フラットな接地マーク(平面的な細い帯)を描く */
+  /**
+   * 各ファイターの足元に、フラットな接地マーク(平面的な細い帯)を描く。
+   * ジャンプで浮いている間は、高さに応じてマークを縮小・薄くすることで
+   * 「足元から離れている」距離感を表現する(マーク自体は常に地面に留まる)。
+   */
   private drawShadow(p: PlayerState): void {
     const { ctx } = this;
-    const x = p.x + ARENA.playerSize * 0.1;
-    const w = ARENA.playerSize * 0.8;
+    const heightRatio = Math.min(1, p.y / 80);
+    const fullW = ARENA.playerSize * 0.8;
+    const w = fullW * (1 - heightRatio * 0.4);
+    const x = p.x + (ARENA.playerSize - w) / 2;
     const y = ARENA.floorY + ARENA.playerSize + 1;
+    const alpha = 0.28 * (1 - heightRatio * 0.75);
 
     ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.fillStyle = `rgba(0,0,0,${alpha.toFixed(2)})`;
     ctx.fillRect(x, y, w, 3);
     ctx.restore();
   }
@@ -200,7 +234,7 @@ export class Renderer {
       ctx.globalAlpha = alpha;
       this.drawRoundedRect(
         p.x + offset,
-        ARENA.floorY,
+        ARENA.floorY - p.y,
         ARENA.playerSize,
         ARENA.playerSize,
         8,
@@ -219,12 +253,23 @@ export class Renderer {
     ctx.save();
     ctx.globalAlpha = isIframe ? 0.45 : 1;
 
-    const x = p.x;
-    const y = ARENA.floorY;
     const size = ARENA.playerSize;
     const dark = p.id === 0 ? COLORS.p0Dark : COLORS.p1Dark;
     const main = isStunned ? COLORS.stunned : p.id === 0 ? COLORS.p0 : COLORS.p1;
     const light = p.id === 0 ? COLORS.p0Light : COLORS.p1Light;
+
+    // スクワッシュ&ストレッチ: 着地直後はつぶれ、上昇中は縦に伸び・横に縮む。
+    // 足元(バウンディングボックス下端)を基準に拡縮することで、
+    // 地面/シャドウとの接地感を保ったまま変形させる。
+    const [scaleX, scaleY] = this.jumpSquashScale(p);
+
+    // 足元を原点として平行移動 + スケールする
+    const anchorX = p.x + size / 2;
+    const anchorY = ARENA.floorY - p.y + size;
+    ctx.translate(anchorX, anchorY);
+    ctx.scale(scaleX, scaleY);
+    const x = -size / 2;
+    const y = -size;
 
     // 攻撃中 / 被スタン中はグロー(外側の光彩)を描く
     if (isAttacking || isStunned) {
@@ -261,6 +306,29 @@ export class Renderer {
     ctx.fillRect(eyeX, eyeY, eyeSize, eyeSize);
 
     ctx.restore();
+  }
+
+  /**
+   * ジャンプ/落下/着地に応じたスクワッシュ&ストレッチの倍率 `[scaleX, scaleY]` を返す。
+   * - 着地直後(`landingSquash` 残り時間中): 横に広がり縦に縮む「つぶれ」。
+   * - 上昇中(`vy > 0`): 縦に伸び横に縮む。
+   * - 下降中(`vy < 0`、空中): 上昇中より弱めに、縦に伸び横に縮む(落下感)。
+   */
+  private jumpSquashScale(p: PlayerState): [number, number] {
+    const squashRemaining = this.landingSquash[p.id];
+    if (squashRemaining > 0) {
+      const t = squashRemaining / LANDING_SQUASH_MS;
+      return [1 + AIR_STRETCH_MAX * 1.5 * t, 1 - AIR_STRETCH_MAX * 1.5 * t];
+    }
+    if (p.vy > 0) {
+      const t = Math.min(1, p.vy / JUMP.velocity);
+      return [1 - AIR_STRETCH_MAX * 0.6 * t, 1 + AIR_STRETCH_MAX * t];
+    }
+    if (p.vy < 0 && p.y > 0) {
+      const t = Math.min(1, -p.vy / JUMP.velocity);
+      return [1 - AIR_STRETCH_MAX * 0.4 * t, 1 + AIR_STRETCH_MAX * 0.7 * t];
+    }
+    return [1, 1];
   }
 
   /** 角丸矩形のパスを構築する(描画はしない) */
@@ -321,14 +389,15 @@ export class Renderer {
       grad.addColorStop(1, `rgba(${color}, ${(alpha * 0.4).toFixed(2)})`);
     }
 
+    const telegraphY = ARENA.floorY - p.y - 6;
     ctx.fillStyle = grad;
-    ctx.fillRect(x0, ARENA.floorY - 6, width, ARENA.playerSize + 12);
+    ctx.fillRect(x0, telegraphY, width, ARENA.playerSize + 12);
 
     // 発生間際は外枠を強調してさらに目立たせる
     if (progress > 0.7) {
       ctx.strokeStyle = `rgba(${color}, ${Math.min(1, alpha + 0.2).toFixed(2)})`;
       ctx.lineWidth = isHeavy ? 3 : 2;
-      ctx.strokeRect(x0, ARENA.floorY - 6, width, ARENA.playerSize + 12);
+      ctx.strokeRect(x0, telegraphY, width, ARENA.playerSize + 12);
     }
   }
 
@@ -341,7 +410,7 @@ export class Renderer {
     const { ctx } = this;
     const cx = p.x + ARENA.playerSize / 2;
     ctx.fillStyle = COLORS.hitbox;
-    ctx.fillRect(cx - spec.range, ARENA.floorY - 10, spec.range * 2, ARENA.playerSize + 20);
+    ctx.fillRect(cx - spec.range, ARENA.floorY - p.y - 10, spec.range * 2, ARENA.playerSize + 20);
   }
 
   private drawHud(state: GameState): void {

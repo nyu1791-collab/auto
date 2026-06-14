@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { resolveAttackTick } from '../src/engine/combat';
-import { ATTACKS, JUST, PLAYER } from '../src/engine/constants';
+import { ATTACKS, JUMP, JUST, PLAYER } from '../src/engine/constants';
 import type { PlayerState } from '../src/engine/types';
 
 function makePlayer(overrides: Partial<PlayerState> = {}): PlayerState {
   return {
     id: 0,
     x: 0,
+    y: 0,
+    vy: 0,
+    airJumps: JUMP.airJumps,
     facing: 1,
     hp: PLAYER.maxHp,
     stamina: PLAYER.maxStamina,
@@ -119,6 +122,27 @@ describe('resolveAttackTick', () => {
       x: 10,
       dodge: { elapsed: 11, startedAtTick: 0 },
     });
+
+    const outcome = resolveAttackTick(attacker, defender, 100);
+    expect(outcome).toEqual({ justDodge: false, defenderDamage: ATTACKS.light.damage });
+  });
+
+  it('misses when the defender has jumped over the attack (height gap exceeds verticalRange)', () => {
+    const attacker = makePlayer({
+      x: 0,
+      attack: { kind: 'light', elapsed: ATTACKS.light.windup, hasHit: false },
+    });
+    const defender = makePlayer({ x: 10, y: ATTACKS.light.verticalRange + 1 });
+
+    expect(resolveAttackTick(attacker, defender, 100)).toBeNull();
+  });
+
+  it('hits when the height gap is within verticalRange', () => {
+    const attacker = makePlayer({
+      x: 0,
+      attack: { kind: 'light', elapsed: ATTACKS.light.windup, hasHit: false },
+    });
+    const defender = makePlayer({ x: 10, y: ATTACKS.light.verticalRange });
 
     const outcome = resolveAttackTick(attacker, defender, 100);
     expect(outcome).toEqual({ justDodge: false, defenderDamage: ATTACKS.light.damage });

@@ -26,6 +26,7 @@ const P1_BUTTONS: ButtonSpec[] = [
   { label: '◀', key: 'a', className: 'tc-left' },
   { label: '▶', key: 'd', className: 'tc-right' },
   { label: '回避', key: 'w', className: 'tc-dodge' },
+  { label: 'JUMP', key: ' ', className: 'tc-jump' },
   { label: '弱', key: 'f', className: 'tc-light' },
   { label: '強', key: 'g', className: 'tc-heavy' },
 ];
@@ -34,6 +35,7 @@ const P2_BUTTONS: ButtonSpec[] = [
   { label: '◀', key: 'arrowleft', className: 'tc-left' },
   { label: '▶', key: 'arrowright', className: 'tc-right' },
   { label: '回避', key: 'arrowup', className: 'tc-dodge' },
+  { label: 'JUMP', key: 'shift', className: 'tc-jump' },
   { label: '弱', key: 'k', className: 'tc-light' },
   { label: '強', key: 'l', className: 'tc-heavy' },
 ];
@@ -83,9 +85,15 @@ export class TouchControls {
     container.appendChild(this.root);
   }
 
-  /** VS PLAYER (2P) モードかどうかに応じて P2 クラスタの表示を切り替える */
+  /**
+   * VS PLAYER (2P) モードかどうかに応じて P2 クラスタの表示を切り替える。
+   * 1P (VS CPU) では P1 クラスタを画面全幅に広げ、移動ボタンを左端・
+   * アクションボタン(回避/ジャンプ/攻撃)を右端へ大きく離す
+   * (`tc-two-player` の有無で `.tc-cluster` の幅を CSS 側で切り替える)。
+   */
   setTwoPlayer(enabled: boolean): void {
     this.p2Cluster.classList.toggle('tc-hidden', !enabled);
+    this.root.classList.toggle('tc-two-player', enabled);
   }
 
   private buildCluster(buttons: ButtonSpec[], className: string): HTMLDivElement {

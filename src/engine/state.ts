@@ -1,10 +1,13 @@
-import { ARENA, MATCH, PLAYER } from './constants';
+import { ARENA, JUMP, MATCH, PLAYER } from './constants';
 import type { GameState, PlayerState } from './types';
 
 function createPlayer(id: 0 | 1, x: number, facing: 1 | -1): PlayerState {
   return {
     id,
     x,
+    y: 0,
+    vy: 0,
+    airJumps: JUMP.airJumps,
     facing,
     hp: PLAYER.maxHp,
     stamina: PLAYER.maxStamina,

@@ -1,4 +1,4 @@
-import { ARENA, ATTACKS, DODGE, MATCH, PLAYER, TPS } from './constants';
+import { ARENA, ATTACKS, DODGE, JUMP, MATCH, PLAYER, TPS } from './constants';
 import { resolveAttackTick } from './combat';
 import { resetRound } from './state';
 import type { GameState, Inputs, PlayerState } from './types';
@@ -68,6 +68,17 @@ export function step(state: GameState, inputs: Inputs): GameState {
       p.stamina -= DODGE.staminaCost;
       p.dodge = { elapsed: 0, startedAtTick: state.tick };
     }
+
+    // ジャンプ: この tick に攻撃/回避を開始していない(=まだ非ロック)ときのみ。
+    // 接地中は通常ジャンプ、空中は airJumps を消費して二段ジャンプする。
+    if (input.jump && !isLocked(p)) {
+      if (p.y === 0 && p.vy === 0) {
+        p.vy = JUMP.velocity;
+      } else if (p.airJumps > 0) {
+        p.vy = JUMP.velocity;
+        p.airJumps -= 1;
+      }
+    }
   }
 
   for (const p of players) {
@@ -95,19 +106,30 @@ export function step(state: GameState, inputs: Inputs): GameState {
     }
   }
 
-  // 移動: 回避 i-frame 中は相手から離れる方向へダッシュ、それ以外は通常移動
+  // 移動: 横移動(回避ダッシュ/通常/空中)と縦移動(重力)を処理する。
   for (let i = 0; i < 2; i++) {
     const p = players[i];
     const input = inputs[i];
 
+    // --- 横移動 ---
     if (p.dodge && p.dodge.elapsed < DODGE.iframes) {
+      // 回避 i-frame 中は相手と反対方向へダッシュ
       p.x = clampX(p.x - p.facing * DODGE.dashSpeed);
-      continue;
+    } else if (!(p.attack || p.dodge || p.stunTicks > 0) && input.move !== 0) {
+      // 通常移動。空中では制御を弱める(airMoveSpeed)。
+      const speed = p.y > 0 ? PLAYER.airMoveSpeed : PLAYER.moveSpeed;
+      p.x = clampX(p.x + input.move * speed);
     }
-    if (p.attack || p.dodge || p.stunTicks > 0) continue;
 
-    if (input.move !== 0) {
-      p.x = clampX(p.x + input.move * PLAYER.moveSpeed);
+    // --- 縦移動(重力)。空中なら攻撃/回避/硬直中でも常に落下させる ---
+    if (p.y > 0 || p.vy !== 0) {
+      p.y += p.vy;
+      p.vy -= JUMP.gravity;
+      if (p.y <= 0) {
+        p.y = 0;
+        p.vy = 0;
+        p.airJumps = JUMP.airJumps;
+      }
     }
   }
 

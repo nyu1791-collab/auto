@@ -3,7 +3,7 @@ import type { AttackKind, GameState, PlayerId, PlayerInput } from '../engine/typ
 
 export type Bot = (state: GameState, self: PlayerId) => PlayerInput;
 
-const NO_INPUT: PlayerInput = { move: 0, dodge: false, attack: null };
+const NO_INPUT: PlayerInput = { move: 0, dodge: false, jump: false, attack: null };
 
 function distance(state: GameState, self: PlayerId): number {
   const a = state.players[self];
@@ -20,9 +20,9 @@ export const aggressiveBot: Bot = (state, self) => {
   const dist = distance(state, self);
   const kind: AttackKind = dist <= ATTACKS.light.range ? 'light' : 'heavy';
   if (dist <= ATTACKS[kind].range) {
-    return { move: 0, dodge: false, attack: kind };
+    return { move: 0, dodge: false, jump: false, attack: kind };
   }
-  return { move: opp.x > me.x ? 1 : -1, dodge: false, attack: null };
+  return { move: opp.x > me.x ? 1 : -1, dodge: false, jump: false, attack: null };
 };
 
 /**
@@ -44,16 +44,16 @@ export function reactiveBot(reactionDelay: number): Bot {
       const ticksUntilActive = spec.windup - opp.attack.elapsed;
       const canDodge = me.dodgeCooldown === 0 && me.stamina >= DODGE.staminaCost;
       if (ticksUntilActive >= 0 && ticksUntilActive <= reactionDelay && canDodge) {
-        return { move: 0, dodge: true, attack: null };
+        return { move: 0, dodge: true, jump: false, attack: null };
       }
     }
 
     const dist = distance(state, self);
     if (dist > ATTACKS.light.range) {
-      return { move: opp.x > me.x ? 1 : -1, dodge: false, attack: null };
+      return { move: opp.x > me.x ? 1 : -1, dodge: false, jump: false, attack: null };
     }
     if (dist <= ATTACKS.light.range && opp.attack === null && opp.stunTicks > 0) {
-      return { move: 0, dodge: false, attack: 'light' };
+      return { move: 0, dodge: false, jump: false, attack: 'light' };
     }
     return NO_INPUT;
   };
@@ -100,7 +100,7 @@ export function cpuBot(reactionDelay = 6, skipReactionChance = 0.35): Bot {
         canDodge &&
         Math.random() >= skipReactionChance
       ) {
-        return { move: 0, dodge: true, attack: null };
+        return { move: 0, dodge: true, jump: false, attack: null };
       }
     }
 
@@ -110,19 +110,19 @@ export function cpuBot(reactionDelay = 6, skipReactionChance = 0.35): Bot {
     // 相手が硬直中(ジャスト回避で隙ができた)、または攻撃の空振り直後で
     // 間合い内なら攻め込む。
     if (dist <= lightRange && opp.attack === null && opp.stunTicks > 0) {
-      return { move: 0, dodge: false, attack: Math.random() < 0.5 ? 'heavy' : 'light' };
+      return { move: 0, dodge: false, jump: false, attack: Math.random() < 0.5 ? 'heavy' : 'light' };
     }
 
     // 間合いの維持: 近すぎたら離れ、遠すぎたら詰める。
     // 適度な距離ならランダムに軽攻撃を打ち込んで隙を見せる。
     if (dist > lightRange + 20) {
-      return { move: opp.x > me.x ? 1 : -1, dodge: false, attack: null };
+      return { move: opp.x > me.x ? 1 : -1, dodge: false, jump: false, attack: null };
     }
     if (dist < lightRange - 30) {
-      return { move: opp.x > me.x ? -1 : 1, dodge: false, attack: null };
+      return { move: opp.x > me.x ? -1 : 1, dodge: false, jump: false, attack: null };
     }
     if (dist <= lightRange && opp.attack === null && Math.random() < 0.02) {
-      return { move: 0, dodge: false, attack: 'light' };
+      return { move: 0, dodge: false, jump: false, attack: 'light' };
     }
 
     return NO_INPUT;
